@@ -512,9 +512,11 @@ class Weather(BasePlugin):
 
         wind_deg = weather.get('current', {}).get("wind_deg", 0)
         wind_arrow = self.get_wind_arrow(wind_deg)
+        wind_speed_raw = weather.get('current', {}).get("wind_speed", 0)
+        wind_speed = round(wind_speed_raw * 3.6, 1) if units != "imperial" else wind_speed_raw
         data_points.append({
             "label": "Wind",
-            "measurement": weather.get('current', {}).get("wind_speed"),
+            "measurement": wind_speed,
             "unit": UNITS[units]["speed"],
             "icon": self.get_plugin_dir('icons/wind.png'),
             "arrow": wind_arrow

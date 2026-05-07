@@ -163,7 +163,7 @@ Chart.register({
     ctx.stroke();
     const lastVal = windData[windData.length - 1];
     const lastX = x.getPixelForValue(windData.length - 1);
-    const lastY = bottom - (lastVal / maxWind) * height * 0.35;
+    const lastY = Math.max(top + 10, bottom - (lastVal / maxWind) * height);
     ctx.fillStyle = "{{ plugin_settings.textColor }}";
     ctx.font = '9px sans-serif';
     ctx.fillText(lastVal.toFixed(1), lastX - 10, lastY - 4);
@@ -234,7 +234,7 @@ Chart.register({
 	{% if plugin_settings.displaySunshine == "true" %}
 	{
 	  type: 'bar',
-	  label: 'Sunshine Probability',
+	  label: 'Sunshine Duration',
   	  data: sunshine,
   	  borderColor: 'rgba(252, 204, 5, 1)',
   	  borderWidth: {

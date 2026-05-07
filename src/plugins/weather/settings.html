@@ -226,9 +226,9 @@
 	    document.getElementById('displayRain').checked = pluginSettings.displayRain;
             document.getElementById('displayRain').value = pluginSettings.displayRain;
 
-	    document.getElementById('displayWind').checked = pluginSettings.displayWind;
-	    document.getElementById('displayWind').value = pluginSettings.displayWind;
-		
+	    document.getElementById('displayWind').checked = pluginSettings.displayWind === 'true';
+	    document.getElementById('displayWind').value = pluginSettings.displayWind || 'false';
+
 	    document.getElementById('displaySunshine').checked = pluginSettings.displaySunshine === 'true';
 	    document.getElementById('displaySunshine').value = pluginSettings.displaySunshine || 'false';
 
