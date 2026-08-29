@@ -40,10 +40,9 @@ def resize_image(image, desired_size, image_settings=[]):
 
     keep_width = "keep-width" in image_settings
 
-    x_offset, y_offset = 0,0
-    new_width, new_height = img_width,img_height
+    x_offset, y_offset = 0, 0
+    new_width, new_height = img_width, img_height
     # Step 1: Determine crop dimensions
-    desired_ratio = desired_width / desired_height
     if img_ratio > desired_ratio:
         # Image is wider than desired aspect ratio
         new_width = int(img_height * desired_ratio)
@@ -148,7 +147,16 @@ def take_screenshot(target, dimensions, timeout_ms=None):
             "--mute-audio",
             "--renderer-process-limit=1",
             "--no-zygote",
-            "--no-sandbox"
+            "--no-sandbox",
+            # Startup-trimming flags to reduce Chromium cold-start time, which
+            # dominates render time on low-resource devices (e.g. Pi Zero).
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-default-apps",
+            "--disable-component-update",
+            "--disable-features=Translate,BackForwardCache"
         ]
         if timeout_ms:
             command.append(f"--timeout={timeout_ms}")
