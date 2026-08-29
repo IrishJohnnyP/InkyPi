@@ -85,3 +85,15 @@ th {
   word-wrap: break-word !important;
   overflow-wrap: break-word !important;
 }
+
+/* Stack Event Time Above Title */
+.fc-dayGridMonth-view .fc-event-main-frame,
+.fc-dayGrid-view .fc-event-main-frame {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.fc-dayGridMonth-view .fc-event-time,
+.fc-dayGrid-view .fc-event-time {
+  padding-bottom: 2px !important;
+}
