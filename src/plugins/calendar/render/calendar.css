@@ -64,15 +64,6 @@ th {
   border-left-color: transparent !important;
 }
 
-/* Call the dynamic scaled variable from HTML */
-.fc .fc-toolbar-title {
-  font-size: var(--fc-title-font-size) !important; 
-}
-
-.fc table {
-  font-size: var(--fc-table-font-size) !important;
-}
-
 /* Force Block Display on the Outer Event and Allow Wrapping */
 .fc-dayGridMonth-view .fc-daygrid-event,
 .fc-dayGrid-view .fc-daygrid-event {
@@ -114,11 +105,6 @@ th {
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
   font-weight: normal !important; 
-}
-
-/* Call the new column header dynamic scaled variable from HTML */
-.fc .fc-col-header-cell-cushion {
-  font-size: var(--fc-col-header-font-size) !important; 
 }
 
 /* Add bold weight and margin to the time specifically */
