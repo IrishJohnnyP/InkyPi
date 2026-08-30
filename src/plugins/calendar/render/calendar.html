@@ -2,28 +2,16 @@
 
 {% block content %}
 
-<style>
-  /* Inject computed sizes directly to bypass CSS variable rendering bugs */
-  .fc .fc-toolbar-title {
-    font-size: {{ 2.5 * font_scale }}em !important;
-  }
-  .fc table {
-    font-size: {{ 1 * font_scale }}em !important;
-  }
-  .fc .fc-col-header-cell-cushion {
-    font-size: {{ 2.0 * font_scale }}em !important;
-  }
-</style>
-
 <script src="{{static_dir}}/scripts/calendar.min.js" charset="UTF-8"></script>
 
+<!-- The root font-size scales the entire container automatically based on your dropdown choice -->
 <div id="calendar" class="calendar" style="
+font-size: {{ font_scale }}em;
 --fc-page-bg-color: {{ plugin_settings.backgroundColor or white }};
 --fc-border-color: {{ plugin_settings.textColor }};
 --fc-today-bg-color: '';
 --fc-now-indicator-color: {{ plugin_settings.nowIndicatorColor or red }};
 --fc-event-border-color: {{ plugin_settings.textColor or white }};
---fc-small-font-size: {{ 0.85 * font_scale }}em;
 ">
 </div>
 
