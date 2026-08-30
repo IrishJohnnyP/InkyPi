@@ -65,8 +65,8 @@ th {
 }
 
 .fc .fc-toolbar-title {
-  */font-size: var(--fc-title-font-size) !important; */
-  font-size: 2.5em !important; /* Increased from the default ~1.75em */
+  /* Multiplies the dynamic scaled size to make it significantly larger */
+  font-size: calc(var(--fc-table-font-size) * 2.5) !important; 
 }
 
 .fc table {
@@ -117,7 +117,8 @@ th {
 }
 
 .fc .fc-col-header-cell-cushion {
-  font-size: 2.0em !important; /* Adjust this em value to your preference */
+  /* Multiplies the dynamic scaled size for the column headers */
+  font-size: calc(var(--fc-table-font-size) * 2.0) !important; 
 }
 
 /* Add bold weight and margin to the time specifically */
