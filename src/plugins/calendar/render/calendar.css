@@ -65,7 +65,7 @@ th {
 }
 
 .fc .fc-toolbar-title {
-  font-size: var(--fc-title-font-size) !important;
+  */font-size: var(--fc-title-font-size) !important; */
   font-size: 2.5em !important; /* Increased from the default ~1.75em */
 }
 
