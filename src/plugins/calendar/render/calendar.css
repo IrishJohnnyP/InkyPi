@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700&display=swap');
+
 /* Basic Reset */
 * {
   box-sizing: border-box;
@@ -8,7 +10,7 @@
 .calendar {
   width: 100%;
   height: 100%;
-  font-family: "Jost";
+  font-family: "Roboto Condensed", sans-serif;
   overflow: hidden;
 }
 
@@ -18,7 +20,6 @@
 
 .fc .fc-daygrid-body-natural .fc-daygrid-day-events {
   margin-bottom: 0px !important;
-  
 }
 
 .fc .fc-daygrid-day-number {
@@ -63,11 +64,60 @@ th {
   border-left-color: transparent !important;
 }
 
-
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
 }
 
 .fc table {
   font-size: var(--fc-table-font-size) !important;
+}
+
+/* Force Block Display on the Outer Event and Allow Wrapping */
+.fc-dayGridMonth-view .fc-daygrid-event,
+.fc-dayGrid-view .fc-daygrid-event {
+  display: block !important;
+  white-space: normal !important;
+  height: auto !important;
+}
+
+/* Disable Flexbox and Force Inline Text Flow for Inner Elements */
+.fc-dayGridMonth-view .fc-event-main,
+.fc-dayGrid-view .fc-event-main,
+.fc-dayGridMonth-view .fc-event-main-frame,
+.fc-dayGrid-view .fc-event-main-frame,
+.fc-dayGridMonth-view .fc-event-title-container,
+.fc-dayGrid-view .fc-event-title-container {
+  display: inline !important;
+  white-space: normal !important;
+}
+
+/* Ensure the Dot Remains Visible but Flows Inline */
+.fc-dayGridMonth-view .fc-daygrid-event-dot,
+.fc-dayGrid-view .fc-daygrid-event-dot {
+  display: inline-block !important;
+  margin-right: 4px !important;
+  vertical-align: middle !important;
+}
+
+/* Treat Time and Title as Standard Inline Text */
+.fc-dayGridMonth-view .fc-event-time,
+.fc-dayGrid-view .fc-event-time,
+.fc-dayGridMonth-view .fc-event-title,
+.fc-dayGrid-view .fc-event-title {
+  display: inline !important;
+  white-space: normal !important;
+  word-wrap: break-word !important;
+}
+
+/* Make title normal weight specifically */
+.fc-dayGridMonth-view .fc-event-title,
+.fc-dayGrid-view .fc-event-title {
+  font-weight: normal !important; 
+}
+
+/* Add bold weight and margin to the time specifically */
+.fc-dayGridMonth-view .fc-event-time,
+.fc-dayGrid-view .fc-event-time {
+  margin-right: 4px !important;
+  font-weight: bold !important;
 }
