@@ -14,6 +14,19 @@
   overflow: hidden;
 }
 
+/* Base element sizes. These multiply automatically against the container's font_scale */
+.fc .fc-toolbar-title {
+  font-size: 2.5em !important; 
+}
+
+.fc .fc-col-header-cell-cushion {
+  font-size: 2.0em !important; 
+}
+
+.fc table {
+  font-size: 1em !important;
+}
+
 .fc-toolbar.fc-header-toolbar {
   margin-bottom: 0px !important;
 }
