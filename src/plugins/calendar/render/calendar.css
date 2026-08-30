@@ -70,42 +70,38 @@ th {
   font-size: var(--fc-table-font-size) !important;
 }
 
-/* Wrap Event Title and Keep Dot Inline with Time */
+/* Wrap Event Title and Align Wrap Left Under Dot */
 .fc-dayGridMonth-view .fc-daygrid-event,
 .fc-dayGrid-view .fc-daygrid-event,
 .fc-dayGridMonth-view .fc-event-main,
-.fc-dayGrid-view .fc-event-main,
+.fc-dayGrid-view .fc-event-main {
+  white-space: normal !important;
+}
+
 .fc-dayGridMonth-view .fc-event-main-frame,
 .fc-dayGrid-view .fc-event-main-frame {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: wrap !important;
-  align-items: center !important;
+  display: block !important; 
   white-space: normal !important;
-  width: 100% !important;
 }
 
 .fc-dayGridMonth-view .fc-daygrid-event-dot,
 .fc-dayGrid-view .fc-daygrid-event-dot {
   display: inline-block !important;
   margin-right: 4px !important;
+  vertical-align: middle !important;
 }
 
 .fc-dayGridMonth-view .fc-event-time,
 .fc-dayGrid-view .fc-event-time {
-  display: inline-block !important;
-  width: auto !important;
-  padding-bottom: 2px !important;
-  flex-shrink: 0 !important;
+  display: inline !important;
+  margin-right: 4px !important;
 }
 
 .fc-dayGridMonth-view .fc-event-title-container,
 .fc-dayGrid-view .fc-event-title-container,
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
-  display: block !important;
-  width: 100% !important;
-  flex-basis: 100% !important;
+  display: inline !important;
   white-space: normal !important;
   word-wrap: break-word !important;
   overflow-wrap: break-word !important;
