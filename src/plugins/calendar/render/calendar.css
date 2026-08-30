@@ -14,8 +14,10 @@
   overflow: hidden;
 }
 
+/* Apply the dynamic scaling base variable to the toolbar parent */
 .fc-toolbar.fc-header-toolbar {
   margin-bottom: 0px !important;
+  font-size: var(--fc-table-font-size) !important; 
 }
 
 .fc .fc-daygrid-body-natural .fc-daygrid-day-events {
@@ -64,11 +66,12 @@ th {
   border-left-color: transparent !important;
 }
 
+/* Now 2.5em correctly multiplies against the scaled parent */
 .fc .fc-toolbar-title {
-  /* Multiplies the dynamic scaled size to make it significantly larger */
-  font-size: calc(var(--fc-table-font-size) * 2.5) !important; 
+  font-size: 2.5em !important; 
 }
 
+/* The table already has var(--fc-table-font-size), so em units compound naturally */
 .fc table {
   font-size: var(--fc-table-font-size) !important;
 }
@@ -117,8 +120,7 @@ th {
 }
 
 .fc .fc-col-header-cell-cushion {
-  /* Multiplies the dynamic scaled size for the column headers */
-  font-size: calc(var(--fc-table-font-size) * 2.0) !important; 
+  font-size: 2.0em !important; 
 }
 
 /* Add bold weight and margin to the time specifically */
