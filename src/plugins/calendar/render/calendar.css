@@ -107,10 +107,17 @@ th {
   display: inline !important;
   white-space: normal !important;
   word-wrap: break-word !important;
+}
+
+/* Make title normal weight specifically */
+.fc-dayGridMonth-view .fc-event-title,
+.fc-dayGrid-view .fc-event-title {
   font-weight: normal !important; 
 }
 
+/* Add bold weight and margin to the time specifically */
 .fc-dayGridMonth-view .fc-event-time,
 .fc-dayGrid-view .fc-event-time {
   margin-right: 4px !important;
+  font-weight: bold !important;
 }
