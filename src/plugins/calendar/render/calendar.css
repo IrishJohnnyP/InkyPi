@@ -70,20 +70,26 @@ th {
   font-size: var(--fc-table-font-size) !important;
 }
 
-/* Wrap Event Title and Align Wrap Left Under Dot */
+/* Force Block Display on the Outer Event and Allow Wrapping */
 .fc-dayGridMonth-view .fc-daygrid-event,
-.fc-dayGrid-view .fc-daygrid-event,
+.fc-dayGrid-view .fc-daygrid-event {
+  display: block !important;
+  white-space: normal !important;
+  height: auto !important;
+}
+
+/* Disable Flexbox and Force Inline Text Flow for Inner Elements */
 .fc-dayGridMonth-view .fc-event-main,
-.fc-dayGrid-view .fc-event-main {
-  white-space: normal !important;
-}
-
+.fc-dayGrid-view .fc-event-main,
 .fc-dayGridMonth-view .fc-event-main-frame,
-.fc-dayGrid-view .fc-event-main-frame {
-  display: block !important; 
+.fc-dayGrid-view .fc-event-main-frame,
+.fc-dayGridMonth-view .fc-event-title-container,
+.fc-dayGrid-view .fc-event-title-container {
+  display: inline !important;
   white-space: normal !important;
 }
 
+/* Ensure the Dot Remains Visible but Flows Inline */
 .fc-dayGridMonth-view .fc-daygrid-event-dot,
 .fc-dayGrid-view .fc-daygrid-event-dot {
   display: inline-block !important;
@@ -91,18 +97,18 @@ th {
   vertical-align: middle !important;
 }
 
+/* Treat Time and Title as Standard Inline Text */
 .fc-dayGridMonth-view .fc-event-time,
-.fc-dayGrid-view .fc-event-time {
-  display: inline !important;
-  margin-right: 4px !important;
-}
-
-.fc-dayGridMonth-view .fc-event-title-container,
-.fc-dayGrid-view .fc-event-title-container,
+.fc-dayGrid-view .fc-event-time,
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
   display: inline !important;
   white-space: normal !important;
   word-wrap: break-word !important;
-  overflow-wrap: break-word !important;
+}
+
+.fc-dayGridMonth-view .fc-event-time,
+.fc-dayGrid-view .fc-event-time {
+  margin-right: 4px !important;
+  font-weight: bold !important;
 }
