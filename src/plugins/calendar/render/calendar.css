@@ -66,6 +66,7 @@ th {
 
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
+  font-size: 2.5em !important; /* Increased from the default ~1.75em */
 }
 
 .fc table {
@@ -113,6 +114,10 @@ th {
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
   font-weight: normal !important; 
+}
+
+.fc .fc-col-header-cell-cushion {
+  font-size: 1.3em !important; /* Adjust this em value to your preference */
 }
 
 /* Add bold weight and margin to the time specifically */
