@@ -266,7 +266,7 @@ class AdaptiveImageLoader:
             
         # Apply slighty Gamma correction (1.2) to enrich mid-tones and faces
         # This targets skin tones without blowing out pure whites
-        img = img.point(lamda x: 255 * (x / 255.0) ** (1.0 / 1.2))
+        img = img.point(lambda x: 255 * (x / 255.0) ** (1.0 / 1.2))
 
         # Fetch hardware profile (defaults to 1.0 for all values if size not found)
         profile = self.display_profiles.get(dimensions, {
