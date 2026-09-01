@@ -63,15 +63,15 @@ class AdaptiveImageLoader:
         # on Pimoroni Spectra 6 displays. 
         self.display_profiles = {
             (1600, 1200): { # 13.3" Spectra 6
-                "saturation": 1.5,
-                "contrast": 1.2,
-                "brightness": 1.05,
+                "saturation": 1.1,   # Lowered from 1.5
+                "contrast": 1.05,    # Softened from 1.2
+                "brightness": 0.95,  # Dropped to pull skin tones away from pure white
                 "sharpness": 1.2
             },
             (800, 480): {   # 7.3" Spectra 6
-                "saturation": 1.1,
-                "contrast": 1.05,
-                "brightness": 1.0,
+                "saturation": 1.0,   # Lowered from 1.1
+                "contrast": 1.0,     # Softened from 1.05
+                "brightness": 0.95,  # Dropped below 1.0
                 "sharpness": 1.2
             }
         }
