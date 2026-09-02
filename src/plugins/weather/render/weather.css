@@ -15,6 +15,12 @@
   height: 100%;
   font-family: "Jost"
 
+  /* Crisp edges for e-ink rendering */
+  text-rendering: auto; 
+  -webkit-font-smoothing: none !important; 
+  font-smoothing: none !important;
+  font-variant-ligatures: none;
+
   /* ✅ E-ink Halo Effect: Forces a solid white outline around all text */
   text-shadow: 
       -2px -2px 0 #FFFFFF,  
