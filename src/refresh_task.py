@@ -112,6 +112,13 @@ class RefreshTask:
                             continue
                         plugin = get_plugin_instance(plugin_config)
                         image = refresh_action.execute(plugin, self.device_config, current_dt)
+                        
+                        # Guard clause to handle rendering timeouts or failures gracefully
+                        if image is None:
+                            plugin_name = getattr(plugin, 'name', plugin.__class__.__name__)
+                            logger.error(f"Plugin '{plugin_name}' failed to generate an image. Skipping refresh.")
+                            continue
+
                         image_hash = compute_image_hash(image)
 
                         refresh_info = refresh_action.get_refresh_info()
@@ -183,7 +190,8 @@ class RefreshTask:
             return None, None
 
         plugin = playlist.get_next_plugin()
-        logger.info(f"Determined next plugin. | active_playlist: {playlist.name} | plugin_instance: {plugin.name}")
+        plugin_name = getattr(plugin, 'name', getattr(plugin, 'plugin_id', 'Unknown'))
+        logger.info(f"Determined next plugin. | active_playlist: {playlist.name} | plugin_instance: {plugin_name}")
 
         return playlist, plugin
     
@@ -256,11 +264,12 @@ class PlaylistRefresh(RefreshAction):
 
     def get_refresh_info(self):
         """Return refresh metadata as a dictionary."""
+        plugin_name = getattr(self.plugin_instance, 'name', self.plugin_instance.plugin_id)
         return {
             "refresh_type": "Playlist",
             "playlist": self.playlist.name,
             "plugin_id": self.plugin_instance.plugin_id,
-            "plugin_instance": self.plugin_instance.name
+            "plugin_instance": plugin_name
         }
 
     def get_plugin_id(self):
@@ -271,23 +280,29 @@ class PlaylistRefresh(RefreshAction):
         """Performs a refresh for the specified plugin instance within its playlist context."""
         # Determine the file path for the plugin's image
         plugin_image_path = os.path.join(device_config.plugin_image_dir, self.plugin_instance.get_image_path())
+        plugin_name = getattr(self.plugin_instance, 'name', self.plugin_instance.plugin_id)
 
         # Check if a refresh is needed based on the plugin instance's criteria
         if self.plugin_instance.should_refresh(current_dt) or self.force:
-            logger.info(f"Refreshing plugin instance. | plugin_instance: '{self.plugin_instance.name}'") 
+            logger.info(f"Refreshing plugin instance. | plugin_instance: '{plugin_name}'") 
             # Generate a new image
             image = plugin.generate_image(self.plugin_instance.settings, device_config)
     
             if image is None:
-                logger.error(f"Plugin '{plugin.name}' failed to generate an image. Skipping refresh.")
-            return None 
+                logger.error(f"Plugin '{plugin_name}' failed to generate an image. Skipping refresh.")
+                return None 
     
             image.save(plugin_image_path)
             self.plugin_instance.latest_refresh_time = current_dt.isoformat()
         else:
-            logger.info(f"Not time to refresh plugin instance, using latest image. | plugin_instance: {self.plugin_instance.name}.")
+            logger.info(f"Not time to refresh plugin instance, using latest image. | plugin_instance: {plugin_name}.")
             # Load the existing image from disk
-            with Image.open(plugin_image_path) as img:
-                image = img.copy()
+            if os.path.exists(plugin_image_path):
+                with Image.open(plugin_image_path) as img:
+                    image = img.copy()
+            else:
+                image = plugin.generate_image(self.plugin_instance.settings, device_config)
+                if image is not None:
+                    image.save(plugin_image_path)
 
         return image
