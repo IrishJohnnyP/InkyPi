@@ -133,13 +133,15 @@ def take_screenshot(target, dimensions, timeout_ms=30000):
         # Create a temporary output file for the screenshot
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_file:
             img_file_path = img_file.name
-
+            
         command = [
             browser,
             target_uri,
             "--headless",
             f"--screenshot={img_file_path}",
             f"--window-size={dimensions[0]},{dimensions[1]}",
+            # ADD THIS LINE TO BYPASS CLOUDFLARE BOT PROTECTION
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "--disable-dev-shm-usage",
             "--disable-gpu",
             "--use-gl=swiftshader",
