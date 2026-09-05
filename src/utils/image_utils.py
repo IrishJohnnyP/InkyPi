@@ -115,7 +115,7 @@ def _find_chromium_binary():
             return candidate
     return None
 
-def take_screenshot(target, dimensions, timeout_ms=60000):
+def take_screenshot(target, dimensions, timeout_ms=90000):
     image = None
     try:
         # Find available browser binary
@@ -140,7 +140,7 @@ def take_screenshot(target, dimensions, timeout_ms=60000):
             "--headless",
             f"--screenshot={img_file_path}",
             f"--window-size={dimensions[0]},{dimensions[1]}",
-            # ADD THIS LINE TO BYPASS CLOUDFLARE BOT PROTECTION
+            # BYPASS CLOUDFLARE BOT PROTECTION
             "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "--disable-dev-shm-usage",
             "--disable-gpu",
@@ -166,8 +166,8 @@ def take_screenshot(target, dimensions, timeout_ms=60000):
             "--disable-features=Translate,BackForwardCache"
         ]
         
-        # Convert timeout_ms to seconds for Python's subprocess (default 30s)
-        timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 30.0
+        # Convert timeout_ms to seconds for Python's subprocess (default 90s)
+        timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 90.0
 
         try:
             # Hard timeout enforced by Python to prevent infinite hanging
