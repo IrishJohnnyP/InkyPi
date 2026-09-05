@@ -37,7 +37,10 @@ FRAME_STYLES = [
 class BasePlugin:
     """Base class for all plugins."""
     def __init__(self, config, **dependencies):
-        self.config = config
+        self.config = config or {}
+
+        # Set default name attribute from config or fall back to class name
+        self.name = self.config.get("name", self.config.get("id", self.__class__.__name__))
 
         # Initialize adaptive image loader for device-aware image processing
         self.image_loader = AdaptiveImageLoader()
@@ -55,18 +58,11 @@ class BasePlugin:
         raise NotImplementedError("generate_image must be implemented by subclasses")
 
     def cleanup(self, settings):
-        """Optional cleanup method that plugins can override to delete associated resources.
-
-        Called when a plugin instance is deleted. Plugins should override this to clean up
-        any files, external resources, or other data associated with the plugin instance.
-
-        Args:
-            settings: The plugin instance's settings dict, which may contain file paths or other resources
-        """
+        """Optional cleanup method that plugins can override to delete associated resources."""
         pass  # Default implementation does nothing
 
     def get_plugin_id(self):
-        return self.config.get("id")
+        return self.config.get("id", self.__class__.__name__.lower())
 
     def get_plugin_dir(self, path=None):
         plugin_dir = os.path.join(PLUGINS_DIR, self.get_plugin_id())
@@ -85,20 +81,28 @@ class BasePlugin:
         return template_params
 
     def render_image(self, dimensions, html_file, css_file=None, template_params={}):
-        # load the base plugin and current plugin css files
-        css_files = [os.path.join(BASE_PLUGIN_RENDER_DIR, "plugin.css")]
-        if css_file:
-            plugin_css = os.path.join(self.render_dir, css_file)
-            css_files.append(plugin_css)
+        try:
+            # load the base plugin and current plugin css files
+            css_files = [os.path.join(BASE_PLUGIN_RENDER_DIR, "plugin.css")]
+            if css_file:
+                plugin_css = os.path.join(self.render_dir, css_file)
+                css_files.append(plugin_css)
 
-        template_params["style_sheets"] = css_files
-        template_params["width"] = dimensions[0]
-        template_params["height"] = dimensions[1]
-        template_params["font_faces"] = get_fonts()
-        template_params["static_dir"] = STATIC_DIR
+            template_params["style_sheets"] = css_files
+            template_params["width"] = dimensions[0]
+            template_params["height"] = dimensions[1]
+            template_params["font_faces"] = get_fonts()
+            template_params["static_dir"] = STATIC_DIR
 
-        # load and render the given html template
-        template = self.env.get_template(html_file)
-        rendered_html = template.render(template_params)
+            # load and render the given html template
+            template = self.env.get_template(html_file)
+            rendered_html = template.render(template_params)
 
-        return take_screenshot_html(rendered_html, dimensions)
+            image = take_screenshot_html(rendered_html, dimensions)
+            if image is None:
+                logger.error(f"[{self.name}] Screenshot rendering returned None (Chromium timeout or failure).")
+                return None
+            return image
+        except Exception as e:
+            logger.exception(f"[{self.name}] Exception occurred during render_image: {e}")
+            return None
