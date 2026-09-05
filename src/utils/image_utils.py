@@ -115,7 +115,7 @@ def _find_chromium_binary():
             return candidate
     return None
 
-def take_screenshot(target, dimensions, timeout_ms=90000):
+def take_screenshot(target, dimensions, timeout_ms=180000):
     image = None
     try:
         # Find available browser binary
@@ -167,7 +167,7 @@ def take_screenshot(target, dimensions, timeout_ms=90000):
         ]
         
         # Convert timeout_ms to seconds for Python's subprocess (default 90s)
-        timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 90.0
+        timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 180.0
 
         try:
             # Hard timeout enforced by Python to prevent infinite hanging
