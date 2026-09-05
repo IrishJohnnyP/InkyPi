@@ -42,6 +42,7 @@ def resize_image(image, desired_size, image_settings=[]):
 
     x_offset, y_offset = 0, 0
     new_width, new_height = img_width, img_height
+    
     # Step 1: Determine crop dimensions
     if img_ratio > desired_ratio:
         # Image is wider than desired aspect ratio
@@ -114,8 +115,7 @@ def _find_chromium_binary():
             return candidate
     return None
 
-
-def take_screenshot(target, dimensions, timeout_ms=None):
+def take_screenshot(target, dimensions, timeout_ms=30000):
     image = None
     try:
         # Find available browser binary
@@ -124,13 +124,19 @@ def take_screenshot(target, dimensions, timeout_ms=None):
             logger.error("No Chromium-based browser found. Install chromium, chromium-headless-shell, or chrome.")
             return None
 
+        # Convert local file paths to proper file:// URIs for Chromium
+        if os.path.exists(target) and not target.startswith("file://"):
+            target_uri = f"file://{os.path.abspath(target)}"
+        else:
+            target_uri = target
+
         # Create a temporary output file for the screenshot
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_file:
             img_file_path = img_file.name
 
         command = [
             browser,
-            target,
+            target_uri,
             "--headless",
             f"--screenshot={img_file_path}",
             f"--window-size={dimensions[0]},{dimensions[1]}",
@@ -148,8 +154,7 @@ def take_screenshot(target, dimensions, timeout_ms=None):
             "--renderer-process-limit=1",
             "--no-zygote",
             "--no-sandbox",
-            # Startup-trimming flags to reduce Chromium cold-start time, which
-            # dominates render time on low-resource devices (e.g. Pi Zero).
+            # Startup-trimming flags to reduce Chromium cold-start time
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -158,13 +163,24 @@ def take_screenshot(target, dimensions, timeout_ms=None):
             "--disable-component-update",
             "--disable-features=Translate,BackForwardCache"
         ]
-        if timeout_ms:
-            command.append(f"--timeout={timeout_ms}")
-        result = subprocess.run(command, capture_output=True, check=False)
+        
+        # Convert timeout_ms to seconds for Python's subprocess (default 30s)
+        timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 30.0
+
+        try:
+            # Hard timeout enforced by Python to prevent infinite hanging
+            result = subprocess.run(command, capture_output=True, check=False, timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            logger.error(f"Chromium screenshot timed out after {timeout_sec} seconds for {target}")
+            if os.path.exists(img_file_path):
+                os.remove(img_file_path)
+            return None
 
         # Check if the process failed or the output file is missing
         if result.returncode != 0 or not os.path.exists(img_file_path):
             logger.error(f"Failed to take screenshot (return code: {result.returncode})")
+            if os.path.exists(img_file_path):
+                os.remove(img_file_path)
             return None
 
         # Load the image using PIL
