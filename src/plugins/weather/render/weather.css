@@ -1,5 +1,9 @@
-/* Import Font */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;900&display=swap');
+@font-face {
+  font-family: 'Inter';
+  src: url('/static/fonts/Inter-VariableFont_opsz,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+}
 
 /* Basic Reset */
 * {
