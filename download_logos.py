@@ -11,7 +11,7 @@ headers = {
 }
 
 # Create the local logos directory if it doesn't exist
-output_dir = "static/logos"
+output_dir = "src/static/logos"
 os.makedirs(output_dir, exist_ok=True)
 
 print("Fetching team list from CFBD...")
