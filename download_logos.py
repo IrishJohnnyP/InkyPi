@@ -6,7 +6,7 @@ import requests
 API_KEY = "YOUR_CFBD_API_KEY"
 url = "https://api.collegefootballdata.com/teams"
 headers = {
-    "Authorization": f"Bearer {API_KEY}",
+    "Authorization": f"Bearer +UbI2XykHMIgN+0aUz6Zs7qlk//yCZZ1N8dF4yFfVHa1fwRVk0RyIhjl48eRAIXG",
     "Accept": "application/json"
 }
 
