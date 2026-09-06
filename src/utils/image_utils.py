@@ -156,6 +156,7 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             "--renderer-process-limit=1",
             "--no-zygote",
             "--no-sandbox",
+            "--num-raster-threads=1",  # Restricts raster threads to lower CPU/RAM spikes
             # Startup-trimming flags to reduce Chromium cold-start time
             "--no-first-run",
             "--no-default-browser-check",
