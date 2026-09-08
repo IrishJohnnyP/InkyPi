@@ -1,17 +1,24 @@
 import os
-from utils.app_utils import resolve_path, get_font
-from plugins.base_plugin.base_plugin import BasePlugin
-from plugins.calendar.constants import LOCALE_MAP, FONT_SIZES
-from PIL import Image, ImageColor, ImageDraw, ImageFont
-import icalendar
-import recurring_ical_events
-from io import BytesIO
+import hashlib
+import time
+import json
 import logging
 import requests
 from datetime import datetime, timedelta
 import pytz
+import icalendar
+import recurring_ical_events
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils.app_utils import resolve_path, get_font
+from plugins.base_plugin.base_plugin import BasePlugin
+from plugins.calendar.constants import LOCALE_MAP, FONT_SIZES
+from PIL import Image, ImageColor, ImageDraw, ImageFont
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
+
+CACHE_DIR = "/tmp/inkypi_calendar_cache"
+CACHE_TTL = 900  # 15 minutes in seconds
 
 class Calendar(BasePlugin):
     def generate_settings_template(self):
@@ -19,6 +26,44 @@ class Calendar(BasePlugin):
         template_params['style_settings'] = True
         template_params['locale_map'] = LOCALE_MAP
         return template_params
+
+    def _get_cached_or_fetch_calendar(self, calendar_url):
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        url_hash = hashlib.md5(calendar_url.encode()).hexdigest()
+        cache_file = os.path.join(CACHE_DIR, f"{url_hash}.ics")
+        
+        # Check local cache validity
+        if os.path.exists(cache_file):
+            if time.time() - os.path.getmtime(cache_file) < CACHE_TTL:
+                try:
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        ics_text = f.read()
+                        return icalendar.Calendar.from_ical(ics_text)
+                except Exception:
+                    pass
+        
+        # Fetch fresh if cache is missing or expired
+        ics_text = self.fetch_calendar_text(calendar_url)
+        if ics_text:
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    f.write(ics_text)
+            except Exception:
+                pass
+            return icalendar.Calendar.from_ical(ics_text)
+        return None
+
+    def fetch_calendar_text(self, calendar_url):
+        if calendar_url.startswith("webcal://"):
+            calendar_url = calendar_url.replace("webcal://", "https://")
+        try:
+            # Fail fast with a (connect, read) timeout tuple instead of hanging for 30s
+            response = requests.get(calendar_url, timeout=(3.05, 10))
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to fetch iCalendar url {calendar_url}: {str(e)}")
+            return None
 
     def generate_image(self, settings, device_config):
         calendar_urls = settings.get('calendarURLs[]')
@@ -47,6 +92,7 @@ class Calendar(BasePlugin):
         current_dt = datetime.now(tz)
         start, end = self.get_view_range(view, current_dt, settings)
         logger.debug(f"Fetching events for {start} --> [{current_dt}] --> {end}")
+        
         events = self.fetch_ics_events(calendar_urls, calendar_colors, tz, start, end)
         if not events:
             logger.warning("No events found for ics url")
@@ -73,24 +119,37 @@ class Calendar(BasePlugin):
     def fetch_ics_events(self, calendar_urls, colors, tz, start_range, end_range):
         parsed_events = []
 
-        for calendar_url, color in zip(calendar_urls, colors):
-            cal = self.fetch_calendar(calendar_url)
-            events = recurring_ical_events.of(cal).between(start_range, end_range)
-            contrast_color = self.get_contrast_color(color)
+        # Concurrently fetch all configured calendars using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(calendar_urls) or 1) as executor:
+            future_to_url = {
+                executor.submit(self._get_cached_or_fetch_calendar, url): (url, color) 
+                for url, color in zip(calendar_urls, colors)
+            }
+            
+            for future in as_completed(future_to_url):
+                url, color = future_to_url[future]
+                try:
+                    cal = future.result()
+                    if not cal:
+                        continue
+                    events = recurring_ical_events.of(cal).between(start_range, end_range)
+                    contrast_color = self.get_contrast_color(color)
 
-            for event in events:
-                start, end, all_day = self.parse_data_points(event, tz)
-                parsed_event = {
-                    "title": str(event.get("summary")),
-                    "start": start,
-                    "backgroundColor": color,
-                    "textColor": contrast_color,
-                    "allDay": all_day
-                }
-                if end:
-                    parsed_event['end'] = end
+                    for event in events:
+                        start, end, all_day = self.parse_data_points(event, tz)
+                        parsed_event = {
+                            "title": str(event.get("summary")),
+                            "start": start,
+                            "backgroundColor": color,
+                            "textColor": contrast_color,
+                            "allDay": all_day
+                        }
+                        if end:
+                            parsed_event['end'] = end
 
-                parsed_events.append(parsed_event)
+                        parsed_events.append(parsed_event)
+                except Exception as e:
+                    logger.error(f"[{self.name}] Failed processing events for calendar {url}: {e}")
 
         return parsed_events
     
@@ -137,24 +196,7 @@ class Calendar(BasePlugin):
             end = (dtstart + duration).isoformat()
         return start, end, all_day
 
-    def fetch_calendar(self, calendar_url):
-        # workaround for webcal urls
-        if calendar_url.startswith("webcal://"):
-            calendar_url = calendar_url.replace("webcal://", "https://")
-        try:
-            response = requests.get(calendar_url, timeout=30)
-            response.raise_for_status()
-            return icalendar.Calendar.from_ical(response.text)
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch iCalendar url: {str(e)}")
-
     def get_contrast_color(self, color):
-        """
-        Returns '#000000' (black) or '#ffffff' (white) depending on the contrast
-        against the given color.
-        """
         r, g, b = ImageColor.getrgb(color)
-        # YIQ formula to estimate brightness
         yiq = (r * 299 + g * 587 + b * 114) / 1000
-
         return '#000000' if yiq >= 150 else '#ffffff'
