@@ -16,7 +16,6 @@ import psutil
 import requests
 import tempfile
 import os
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,6 @@ def _is_low_resource_device():
         logger.debug(f"Device RAM: {total_memory_gb:.2f}GB - Low resource mode: {is_low_resource}")
         return is_low_resource
     except Exception as e:
-        # If we can't detect, assume low resource to be safe
         logger.warning(f"Could not detect device memory: {e}. Defaulting to low-resource mode.")
         return True
 
@@ -48,10 +46,9 @@ class AdaptiveImageLoader:
     - Automatic resizing with quality-appropriate filters
     - Hardware-specific calibration profiling based on target dimensions
     - RGB conversion for e-ink compatibility
-    - Comprehensive error handling and logging
+    - Custom Spectra 6 Floyd-Steinberg dithering
     """
 
-    # Default headers to avoid 403 errors from sites that block requests without User-Agent
     DEFAULT_HEADERS = {
         'User-Agent': 'InkyPi/1.0 (https://github.com/fatihak/InkyPi/) Python-requests'
     }
@@ -60,19 +57,19 @@ class AdaptiveImageLoader:
         self.is_low_resource = _is_low_resource_device()
         
         # Hardware-specific calibrations to prevent dithering artifacts
-        # on Pimoroni Spectra 6 displays. 
+        # on Pimoroni Spectra 6 displays.
         self.display_profiles = {
             (1600, 1200): { # 13.3" Spectra 6
-                "saturation": 1.4,   # Lowered from 1.5 then 1.1
-                "contrast": 1.05,    # Softened from 1.2
-                "brightness": 0.95,  # Dropped to pull skin tones away from pure white
-                "sharpness": 1.2
+                "saturation": 0.6,   
+                "contrast": 1.4,     
+                "brightness": 1.0,   
+                "sharpness": 2.0
             },
             (800, 480): {   # 7.3" Spectra 6
-                "saturation": 1.3,   # Lowered from 1.1, then 1.0
-                "contrast": 1.0,     # Softened from 1.05
-                "brightness": 0.95,  # Dropped below 1.0
-                "sharpness": 1.2
+                "saturation": 0.6,
+                "contrast": 1.4,
+                "brightness": 1.0,
+                "sharpness": 2.0
             }
         }
 
@@ -189,21 +186,15 @@ class AdaptiveImageLoader:
     # ========== HIGH-PERFORMANCE IMPLEMENTATIONS ==========
 
     def _load_from_url_fast(self, url, dimensions, timeout_ms, resize, headers=None):
-        """High-performance URL loading by streaming directly into PIL."""
         try:
             logger.debug("Using streamed in-memory processing (high-performance mode)")
 
-            # Merge provided headers with defaults
             request_headers = {**self.DEFAULT_HEADERS, **(headers or {})}
 
             session = get_http_session()
             response = session.get(url, timeout=timeout_ms / 1000, stream=True, headers=request_headers)
             response.raise_for_status()
 
-            # Pipe the raw socket stream directly into PIL — no intermediate bytes
-            # buffer needed. decode_content=True handles gzip/deflate transparently.
-            # img.load() forces full decode while the connection is still open,
-            # since Image.open() is otherwise lazy (header-only).
             response.raw.decode_content = True
             img = Image.open(response.raw)
             img.load()
@@ -250,6 +241,28 @@ class AdaptiveImageLoader:
 
     # ========== SHARED PROCESSING LOGIC ==========
 
+    def _apply_spectra6_dither(self, img):
+        """
+        Forces Pillow's C-optimized Floyd-Steinberg dithering against 
+        the exact Spectra 6 hardware palette.
+        """
+        palette_data = [
+            0, 0, 0,         # Black
+            255, 255, 255,   # White
+            255, 0, 0,       # Red
+            255, 255, 0,     # Yellow
+            0, 255, 0,       # Green
+            0, 0, 255        # Blue
+        ]
+        
+        # Pad to 256 colors (768 integers) required by Pillow
+        palette_data += [0] * (768 - len(palette_data))
+        
+        palette_img = Image.new('P', (1, 1))
+        palette_img.putpalette(palette_data)
+        
+        return img.quantize(palette=palette_img, dither=Image.FLOYDSTEINBERG).convert('RGB')
+
     def _process_and_resize(self, img, dimensions, original_size):
         img = ImageOps.exif_transpose(img)
         if img.size != original_size:
@@ -264,11 +277,11 @@ class AdaptiveImageLoader:
         else:
             img = self._resize_high_performance(img, dimensions)
             
-        # Apply slighty Gamma correction (1.2) to enrich mid-tones and faces
-        # This targets skin tones without blowing out pure whites
-        img = img.point(lambda x: 255 * (x / 255.0) ** (1.0 / 1.2))
+        # Gamma Correction (1.2) - Kept for mixed-use 
+        # Crucial for photos: Lifts dark mid-tones (like faces) so they don't map to black.
+        # Safe for dashboards: High contrast applied later restores the punchiness of solid colors.
+        img = img.point(lambda x: int(255 * (x / 255.0) ** (1.0 / 1.2)))
 
-        # Fetch hardware profile (defaults to 1.0 for all values if size not found)
         profile = self.display_profiles.get(dimensions, {
             "saturation": 1.0, 
             "contrast": 1.0, 
@@ -276,7 +289,6 @@ class AdaptiveImageLoader:
             "sharpness": 1.0
         })
 
-        # Apply e-ink calibrations
         if profile.get("saturation", 1.0) != 1.0:
             img = ImageEnhance.Color(img).enhance(profile["saturation"])
             
@@ -288,6 +300,9 @@ class AdaptiveImageLoader:
             
         if profile.get("sharpness", 1.0) != 1.0:
             img = ImageEnhance.Sharpness(img).enhance(profile["sharpness"])
+
+        # Apply strict 6-color dithering as the final step
+        img = self._apply_spectra6_dither(img)
 
         logger.info(f"Image processing complete: {dimensions[0]}x{dimensions[1]} with hardware profile")
         return img
