@@ -1,108 +1,94 @@
-import logging
 import os
-from utils.app_utils import resolve_path, get_fonts
-from utils.image_utils import take_screenshot_html
+import logging
+import gc
+from jinja2 import Environment, FileSystemLoader
 from utils.image_loader import AdaptiveImageLoader
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from pathlib import Path
-import asyncio
-import base64
+from utils.image_utils import take_screenshot_html
 
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = resolve_path("static")
-PLUGINS_DIR = resolve_path("plugins")
-BASE_PLUGIN_DIR =  os.path.join(PLUGINS_DIR, "base_plugin")
-BASE_PLUGIN_RENDER_DIR = os.path.join(BASE_PLUGIN_DIR, "render")
-
-FRAME_STYLES = [
-    {
-        "name": "None",
-        "icon": "frames/blank.png"
-    },
-    {
-        "name": "Corner",
-        "icon": "frames/corner.png"
-    },
-    {
-        "name": "Top and Bottom",
-        "icon": "frames/top_and_bottom.png"
-    },
-    {
-        "name": "Rectangle",
-        "icon": "frames/rectangle.png"
-    }
-]
 
 class BasePlugin:
-    """Base class for all plugins."""
-    def __init__(self, config, **dependencies):
-        self.config = config or {}
+    """
+    Base class for all InkyPi plugins. Handles template rendering, 
+    jinja context injection, and strict Spectra 6 hardware dithering.
+    """
 
-        # Set default name attribute from config or fall back to class name
-        self.name = self.config.get("name", self.config.get("id", self.__class__.__name__))
+    def __init__(self, name=None):
+        self.name = name or self.__class__.__name__
+        self._setup_jinja_env()
 
-        # Initialize adaptive image loader for device-aware image processing
-        self.image_loader = AdaptiveImageLoader()
-
-        self.render_dir = self.get_plugin_dir("render")
-        if os.path.exists(self.render_dir):
-            # instantiate jinja2 env with base plugin and current plugin render directories
-            loader = FileSystemLoader([self.render_dir, BASE_PLUGIN_RENDER_DIR])
-            self.env = Environment(
-                loader=loader,
-                autoescape=select_autoescape(['html', 'xml'])
-            )
-
-    def generate_image(self, settings, device_config):
-        raise NotImplementedError("generate_image must be implemented by subclasses")
-
-    def cleanup(self, settings):
-        """Optional cleanup method that plugins can override to delete associated resources."""
-        pass  # Default implementation does nothing
-
-    def get_plugin_id(self):
-        return self.config.get("id", self.__class__.__name__.lower())
-
-    def get_plugin_dir(self, path=None):
-        plugin_dir = os.path.join(PLUGINS_DIR, self.get_plugin_id())
-        if path:
-            plugin_dir = os.path.join(plugin_dir, path)
-        return plugin_dir
+    def _setup_jinja_env(self):
+        """Configure Jinja2 environment to load templates from plugin directories."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Look for templates in standard paths relative to plugins
+        candidate_paths = [
+            os.path.abspath(os.path.join(current_dir, "../templates")),
+            os.path.abspath(os.path.join(current_dir, "../../templates")),
+            "/home/john/InkyPi/src/templates",
+            "/usr/local/inkypi/src/templates"
+        ]
+        
+        template_dir = next((p for p in candidate_paths if os.path.isdir(p)), candidate_paths[0])
+        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
 
     def generate_settings_template(self):
-        template_params = {"settings_template": "base_plugin/settings.html"}
+        """Return default settings template structure for the plugin UI."""
+        return {
+            "style_settings": False
+        }
 
-        settings_path = self.get_plugin_dir("settings.html")
-        if Path(settings_path).is_file():
-            template_params["settings_template"] = f"{self.get_plugin_id()}/settings.html"
+    def generate_image(self, settings, device_config):
+        """Override this method in subclasses to return a Pillow Image."""
+        raise NotImplementedError("Plugins must implement generate_image()")
 
-        template_params['frame_styles'] = FRAME_STYLES
-        return template_params
-
-    def render_image(self, dimensions, html_file, css_file=None, template_params={}):
+    def render_image(self, dimensions, html_filename, css_filename, context):
+        """
+        Renders HTML/CSS templates into a Pillow image and applies 
+        strict 6-color Floyd-Steinberg dithering for Spectra 6 displays.
+        """
         try:
-            # load the base plugin and current plugin css files
-            css_files = [os.path.join(BASE_PLUGIN_RENDER_DIR, "plugin.css")]
-            if css_file:
-                plugin_css = os.path.join(self.render_dir, css_file)
-                css_files.append(plugin_css)
+            # 1. Load and render HTML template with context
+            template = self.jinja_env.get_template(html_filename)
+            
+            # Read CSS file content if needed for inline injection
+            css_content = ""
+            if css_filename:
+                try:
+                    css_path = os.path.join(self.jinja_env.loader.searchpath[0], css_filename)
+                    if os.path.exists(css_path):
+                        with open(css_path, "r", encoding="utf-8") as f:
+                            css_content = f.read()
+                except Exception as css_err:
+                    logger.warning(f"[{self.name}] Could not load CSS file {css_filename}: {css_err}")
 
-            template_params["style_sheets"] = css_files
-            template_params["width"] = dimensions[0]
-            template_params["height"] = dimensions[1]
-            template_params["font_faces"] = get_fonts()
-            template_params["static_dir"] = STATIC_DIR
+            context["css_content"] = css_content
+            html_str = template.render(context)
 
-            # load and render the given html template
-            template = self.env.get_template(html_file)
-            rendered_html = template.render(template_params)
+            # 2. Take browser screenshot of the rendered HTML
+            img = take_screenshot_html(html_str, dimensions)
 
-            image = take_screenshot_html(rendered_html, dimensions)
-            if image is None:
-                logger.error(f"[{self.name}] Screenshot rendering returned None (Chromium timeout or failure).")
+            if img is None:
+                logger.error(f"[{self.name}] Failed to render screenshot from template.")
                 return None
-            return image
+
+            # 3. Ensure image is in standard RGB mode before processing
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            # 4. Pass through AdaptiveImageLoader for strict 6-color hardware dither
+            loader = AdaptiveImageLoader()
+            dithered_img = loader._apply_spectra6_dither(img)
+
+            # 5. Explicitly free the un-dithered original image to prevent RAM spikes
+            # crucial for stability on low-resource devices like the Pi Zero 2
+            del img
+            gc.collect()
+
+            logger.info(f"[{self.name}] Template rendered and dithered successfully for Spectra 6.")
+            return dithered_img
+
         except Exception as e:
-            logger.exception(f"[{self.name}] Exception occurred during render_image: {e}")
+            logger.error(f"[{self.name}] Error during template rendering: {e}", exc_info=True)
             return None
