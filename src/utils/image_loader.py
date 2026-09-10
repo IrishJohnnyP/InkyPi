@@ -61,15 +61,15 @@ class AdaptiveImageLoader:
         self.display_profiles = {
             (1600, 1200): { # 13.3" Spectra 6
                 "saturation": 1.0,   
-                "contrast": 1.4,     
-                "brightness": 1.0,   
-                "sharpness": 2.0
+                "contrast": 1.1,     
+                "brightness": 1.05,   
+                "sharpness": 1.0
             },
             (800, 480): {   # 7.3" Spectra 6
                 "saturation": 1.0,
-                "contrast": 1.4,
-                "brightness": 1.0,
-                "sharpness": 2.0
+                "contrast": 1.1,
+                "brightness": 1.05,
+                "sharpness": 1.0
             }
         }
 
