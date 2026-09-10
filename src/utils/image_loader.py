@@ -1,10 +1,7 @@
 """
 Adaptive Image Loader for InkyPi
-Centralized image loading and processing with device-aware optimizations.
-
-Automatically uses memory-efficient strategies on low-RAM devices (Pi Zero/Pi 2W)
-and high-performance strategies on capable devices (Pi 3/4).
-Includes hardware-specific calibration profiles for Spectra 6 displays.
+Enhanced with Spectra 6 white‑point compensation, improved dithering,
+highlight preservation, and hardware‑accurate palette mapping.
 """
 
 from PIL import Image, ImageOps, ImageEnhance
@@ -21,10 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 def _is_low_resource_device():
-    """
-    Detect if running on a low-resource device (e.g., Raspberry Pi Zero).
-    Returns True if device has less than 1GB RAM, False otherwise.
-    """
     try:
         total_memory_gb = psutil.virtual_memory().total / (1024 ** 3)
         is_low_resource = total_memory_gb < 1.0
@@ -36,42 +29,44 @@ def _is_low_resource_device():
 
 
 class AdaptiveImageLoader:
-    """
-    Centralized image loading with device-adaptive optimizations.
-
-    Features:
-    - Automatic device detection (low-resource vs high-performance)
-    - Memory-efficient loading using temp files + PIL draft mode on Pi Zero
-    - Fast in-memory loading on powerful devices
-    - Automatic resizing with quality-appropriate filters
-    - Hardware-specific calibration profiling based on target dimensions
-    - RGB conversion for e-ink compatibility
-    - Custom Spectra 6 Floyd-Steinberg dithering
-    """
-
     DEFAULT_HEADERS = {
         'User-Agent': 'InkyPi/1.0 (https://github.com/fatihak/InkyPi/) Python-requests'
     }
 
     def __init__(self):
         self.is_low_resource = _is_low_resource_device()
-        
-        # Hardware-specific calibrations to prevent dithering artifacts
-        # on Pimoroni Spectra 6 displays.
+
+        # Hardware-specific calibrations
         self.display_profiles = {
-            (1600, 1200): { # 13.3" Spectra 6
-                "saturation": 1.0,   
-                "contrast": 1.1,     
-                "brightness": 1.05,   
-                "sharpness": 1.0
-            },
-            (800, 480): {   # 7.3" Spectra 6
+            (1600, 1200): {
                 "saturation": 1.0,
                 "contrast": 1.1,
                 "brightness": 1.05,
-                "sharpness": 1.0
+                "sharpness": 1.0,
+                "gamma": 1.15
+            },
+            (800, 480): {
+                "saturation": 1.0,
+                "contrast": 1.1,
+                "brightness": 1.05,
+                "sharpness": 1.0,
+                "gamma": 1.15
             }
         }
+
+        # Spectra‑6 white‑point profiles
+        self.white_profiles = {
+            "cool": (240, 245, 255),
+            "neutral": (245, 245, 245),
+            "warm": (250, 240, 230)
+        }
+
+        # Default: Pimoroni 2025 Spectra‑6 = cool white
+        self.white_point = self.white_profiles["cool"]
+
+    # ============================================================
+    # Public API
+    # ============================================================
 
     def from_url(self, url, dimensions, timeout_ms=40000, resize=True, headers=None):
         logger.debug(f"Loading image from URL: {url}")
@@ -107,15 +102,15 @@ class AdaptiveImageLoader:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
-                if img.size != original_size:
-                    logger.debug(f"EXIF orientation applied: {original_size[0]}x{original_size[1]} -> {img.size[0]}x{img.size[1]}")
 
             return img
         except Exception as e:
             logger.error(f"Error loading image from BytesIO: {e}")
             return None
 
-    # ========== LOW-RESOURCE IMPLEMENTATIONS ==========
+    # ============================================================
+    # Low‑resource implementations
+    # ============================================================
 
     def _load_from_url_lowmem(self, url, dimensions, timeout_ms, resize, headers=None):
         tmp_path = None
@@ -139,11 +134,8 @@ class AdaptiveImageLoader:
 
             return self._load_from_file_lowmem(tmp_path, dimensions, resize)
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error downloading image from {url}: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error processing image from {url}: {e}")
+            logger.error(f"Error downloading image from {url}: {e}")
             return None
         finally:
             if tmp_path and os.path.exists(tmp_path):
@@ -157,38 +149,30 @@ class AdaptiveImageLoader:
         try:
             img = Image.open(path)
             original_size = img.size
-            original_pixels = original_size[0] * original_size[1]
-            logger.info(f"Loaded image: {original_size[0]}x{original_size[1]} ({img.mode} mode, {original_pixels/1_000_000:.1f}MP)")
 
             if resize:
                 img.draft('RGB', (dimensions[0] * 2, dimensions[1] * 2))
-                logger.debug("Draft mode applied - PIL will decode at reduced resolution")
                 img.load()
-                logger.debug(f"Image decoded: {img.size[0]}x{img.size[1]} (draft mode reduced from {original_size[0]}x{original_size[1]})")
-
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
-                if img.size != original_size:
-                    logger.debug(f"EXIF orientation applied: {original_size[0]}x{original_size[1]} -> {img.size[0]}x{img.size[1]}")
 
             return img
 
-        except MemoryError as e:
-            logger.error(f"Out of memory while loading {path}: {e}")
-            logger.error("Try using a smaller image or enabling more swap space")
+        except MemoryError:
+            logger.error(f"Out of memory while loading {path}")
             gc.collect()
             return None
         except Exception as e:
             logger.error(f"Error loading image from {path}: {e}")
             return None
 
-    # ========== HIGH-PERFORMANCE IMPLEMENTATIONS ==========
+    # ============================================================
+    # High‑performance implementations
+    # ============================================================
 
     def _load_from_url_fast(self, url, dimensions, timeout_ms, resize, headers=None):
         try:
-            logger.debug("Using streamed in-memory processing (high-performance mode)")
-
             request_headers = {**self.DEFAULT_HEADERS, **(headers or {})}
 
             session = get_http_session()
@@ -200,38 +184,27 @@ class AdaptiveImageLoader:
             img.load()
 
             original_size = img.size
-            original_pixels = original_size[0] * original_size[1]
-            logger.info(f"Downloaded image: {original_size[0]}x{original_size[1]} ({img.mode} mode, {original_pixels/1_000_000:.1f}MP)")
 
             if resize:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
-                if img.size != original_size:
-                    logger.debug(f"EXIF orientation applied: {original_size[0]}x{original_size[1]} -> {img.size[0]}x{img.size[1]}")
 
             return img
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error downloading image from {url}: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error processing image from {url}: {e}")
+            logger.error(f"Error downloading image from {url}: {e}")
             return None
 
     def _load_from_file_fast(self, path, dimensions, resize):
         try:
             img = Image.open(path)
             original_size = img.size
-            original_pixels = original_size[0] * original_size[1]
-            logger.info(f"Loaded image: {original_size[0]}x{original_size[1]} ({img.mode} mode, {original_pixels/1_000_000:.1f}MP)")
 
             if resize:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
-                if img.size != original_size:
-                    logger.debug(f"EXIF orientation applied: {original_size[0]}x{original_size[1]} -> {img.size[0]}x{img.size[1]}")
 
             return img
 
@@ -239,87 +212,100 @@ class AdaptiveImageLoader:
             logger.error(f"Error loading image from {path}: {e}")
             return None
 
-    # ========== SHARED PROCESSING LOGIC ==========
+    # ============================================================
+    # Spectra‑6 enhancements
+    # ============================================================
 
-    def _apply_spectra6_dither(self, img):
-        """
-        Forces Pillow's C-optimized Floyd-Steinberg dithering against 
-        the exact Spectra 6 hardware palette.
-        """
+    def _apply_white_point_compensation(self, img):
+        r_mult, g_mult, b_mult = 0.98, 1.00, 1.06
+        return img.point(lambda x: int(
+            x * r_mult if x < 85 else
+            x * g_mult if x < 170 else
+            x * b_mult
+        ))
+
+    def _preserve_highlights(self, img):
+        return img.point(lambda x: 255 if x > 240 else x)
+
+    def _spectra6_palette(self):
+        wp = self.white_point
         palette_data = [
-            0, 0, 0,         # Black
-            255, 255, 255,   # White
-            255, 0, 0,       # Red
-            255, 255, 0,     # Yellow
-            0, 255, 0,       # Green
-            0, 0, 255        # Blue
+            0, 0, 0,
+            wp[0], wp[1], wp[2],
+            255, 0, 0,
+            255, 255, 0,
+            0, 255, 0,
+            0, 0, 255
         ]
-        
-        # Pad to 256 colors (768 integers) required by Pillow
         palette_data += [0] * (768 - len(palette_data))
-        
         palette_img = Image.new('P', (1, 1))
         palette_img.putpalette(palette_data)
-        
+        return palette_img
+
+    def _apply_spectra6_dither(self, img):
+        palette_img = self._spectra6_palette()
         return img.quantize(palette=palette_img, dither=Image.FLOYDSTEINBERG).convert('RGB')
+
+    # ============================================================
+    # Shared processing logic
+    # ============================================================
 
     def _process_and_resize(self, img, dimensions, original_size):
         img = ImageOps.exif_transpose(img)
-        if img.size != original_size:
-            logger.debug(f"EXIF orientation applied: {original_size[0]}x{original_size[1]} -> {img.size[0]}x{img.size[1]}")
-        
+
         if img.mode in ('RGBA', 'LA', 'P'):
-            logger.debug(f"Converting image from {img.mode} to RGB")
             img = img.convert('RGB')
 
         if self.is_low_resource:
             img = self._resize_low_resource(img, dimensions)
         else:
             img = self._resize_high_performance(img, dimensions)
-            
-        # Gamma Correction (1.2) - Kept for mixed-use 
-        # Crucial for photos: Lifts dark mid-tones (like faces) so they don't map to black.
-        # Safe for dashboards: High contrast applied later restores the punchiness of solid colors.
-        img = img.point(lambda x: int(255 * (x / 255.0) ** (1.0 / 1.2)))
 
+        # White‑point compensation
+        img = self._apply_white_point_compensation(img)
+
+        # Gamma tuning
+        gamma = self.display_profiles.get(dimensions, {}).get("gamma", 1.15)
+        img = img.point(lambda x: int(255 * (x / 255.0) ** (1.0 / gamma)))
+
+        # Highlight preservation
+        img = self._preserve_highlights(img)
+
+        # Saturation / contrast / brightness / sharpness
         profile = self.display_profiles.get(dimensions, {
-            "saturation": 1.0, 
-            "contrast": 1.0, 
-            "brightness": 1.0, 
+            "saturation": 1.0,
+            "contrast": 1.0,
+            "brightness": 1.0,
             "sharpness": 1.0
         })
 
-        if profile.get("saturation", 1.0) != 1.0:
+        if profile["saturation"] != 1.0:
             img = ImageEnhance.Color(img).enhance(profile["saturation"])
-            
-        if profile.get("contrast", 1.0) != 1.0:
+        if profile["contrast"] != 1.0:
             img = ImageEnhance.Contrast(img).enhance(profile["contrast"])
-            
-        if profile.get("brightness", 1.0) != 1.0:
+        if profile["brightness"] != 1.0:
             img = ImageEnhance.Brightness(img).enhance(profile["brightness"])
-            
-        if profile.get("sharpness", 1.0) != 1.0:
+        if profile["sharpness"] != 1.0:
             img = ImageEnhance.Sharpness(img).enhance(profile["sharpness"])
 
-        # Apply strict 6-color dithering as the final step
+        # Final Spectra‑6 dithering
         img = self._apply_spectra6_dither(img)
 
-        logger.info(f"Image processing complete: {dimensions[0]}x{dimensions[1]} with hardware profile")
+        logger.info(f"Image processing complete: {dimensions} with Spectra‑6 enhancements")
         return img
 
+    # ============================================================
+    # Resize helpers
+    # ============================================================
+
     def _resize_low_resource(self, img, dimensions):
-        logger.debug("Using memory-efficient processing (LANCZOS final fit)")
-
         if img.size[0] > dimensions[0] * 2 or img.size[1] > dimensions[1] * 2:
-            logger.debug(f"Image is {img.size[0]}x{img.size[1]}, using two-stage resize")
-
             aspect = img.size[0] / img.size[1]
             if aspect > 1:
                 intermediate_size = (dimensions[0] * 2, int(dimensions[0] * 2 / aspect))
             else:
                 intermediate_size = (int(dimensions[1] * 2 * aspect), dimensions[1] * 2)
 
-            logger.debug(f"Stage 1: Downsampling to ~{intermediate_size[0]}x{intermediate_size[1]} using NEAREST")
             img.thumbnail(intermediate_size, Image.NEAREST)
             gc.collect()
 
@@ -328,5 +314,4 @@ class AdaptiveImageLoader:
         return img
 
     def _resize_high_performance(self, img, dimensions):
-        logger.debug("Using high-quality processing (LANCZOS filter)")
         return ImageOps.fit(img, dimensions, method=Image.LANCZOS)
