@@ -54,16 +54,6 @@ class AdaptiveImageLoader:
             }
         }
 
-        # Spectra‑6 white‑point profiles
-        self.white_profiles = {
-            "cool": (240, 245, 255),
-            "neutral": (245, 245, 245),
-            "warm": (250, 240, 230)
-        }
-
-        # Default: Pimoroni 2025 Spectra‑6 = cool white
-        self.white_point = self.white_profiles["cool"]
-
     # ============================================================
     # Public API
     # ============================================================
@@ -216,26 +206,32 @@ class AdaptiveImageLoader:
     # Spectra‑6 enhancements
     # ============================================================
 
-    def _apply_white_point_compensation(self, img):
-        r_mult, g_mult, b_mult = 0.98, 1.00, 1.06
-        return img.point(lambda x: int(
-            x * r_mult if x < 85 else
-            x * g_mult if x < 170 else
-            x * b_mult
-        ))
-
-    def _preserve_highlights(self, img):
-        return img.point(lambda x: 255 if x > 240 else x)
+    def _apply_unified_tonecurve(self, img, gamma):
+        """Applies Gamma, White-Point, and Highlight Clipping in a single RAM-efficient pass."""
+        lut = []
+        # Multipliers for R, G, B (Cool White compensation)
+        for channel_mult in (0.98, 1.00, 1.06): 
+            for i in range(256):
+                # 1. Apply Gamma
+                val = 255 * (i / 255.0) ** (1.0 / gamma) if i > 0 else 0
+                # 2. Apply White Point Shift
+                val = val * channel_mult
+                # 3. Preserve Highlights (Force to pure white paper for values > 240)
+                val = 255 if val > 240 else val
+                # 4. Clamp to 0-255 bounds
+                lut.append(max(0, min(255, int(val))))
+        
+        return img.point(lut)
 
     def _spectra6_palette(self):
-        wp = self.white_point
+        # Hardware palette MUST remain pure to prevent dither stippling in white areas
         palette_data = [
-            0, 0, 0,
-            wp[0], wp[1], wp[2],
-            255, 0, 0,
-            255, 255, 0,
-            0, 255, 0,
-            0, 0, 255
+            0, 0, 0,         # Black
+            255, 255, 255,   # Pure White
+            255, 0, 0,       # Red
+            255, 255, 0,     # Yellow
+            0, 255, 0,       # Green
+            0, 0, 255        # Blue
         ]
         palette_data += [0] * (768 - len(palette_data))
         palette_img = Image.new('P', (1, 1))
@@ -261,15 +257,9 @@ class AdaptiveImageLoader:
         else:
             img = self._resize_high_performance(img, dimensions)
 
-        # White‑point compensation
-        img = self._apply_white_point_compensation(img)
-
-        # Gamma tuning
+        # Apply Gamma, White-Point, and Highlights efficiently via unified LUT
         gamma = self.display_profiles.get(dimensions, {}).get("gamma", 1.15)
-        img = img.point(lambda x: int(255 * (x / 255.0) ** (1.0 / gamma)))
-
-        # Highlight preservation
-        img = self._preserve_highlights(img)
+        img = self._apply_unified_tonecurve(img, gamma)
 
         # Saturation / contrast / brightness / sharpness
         profile = self.display_profiles.get(dimensions, {
