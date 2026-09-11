@@ -39,7 +39,7 @@ class AdaptiveImageLoader:
         # Hardware-specific calibrations
         self.display_profiles = {
             (1600, 1200): {
-                "saturation": 1.0,
+                "saturation": 1.05,
                 "contrast": 1.1,
                 "brightness": 1.05,
                 "sharpness": 1.0,
