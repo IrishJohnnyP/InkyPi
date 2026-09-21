@@ -1,7 +1,7 @@
 """
 Adaptive Image Loader for InkyPi
-Enhanced with Spectra 6 white‑point compensation, improved dithering,
-highlight preservation, and hardware‑accurate palette mapping.
+Enhanced with Spectra 6 white-point compensation, improved dithering,
+highlight preservation, and hardware-accurate palette mapping.
 """
 
 from PIL import Image, ImageOps, ImageEnhance
@@ -99,7 +99,7 @@ class AdaptiveImageLoader:
             return None
 
     # ============================================================
-    # Low‑resource implementations
+    # Low-resource implementations
     # ============================================================
 
     def _load_from_url_lowmem(self, url, dimensions, timeout_ms, resize, headers=None):
@@ -158,7 +158,7 @@ class AdaptiveImageLoader:
             return None
 
     # ============================================================
-    # High‑performance implementations
+    # High-performance implementations
     # ============================================================
 
     def _load_from_url_fast(self, url, dimensions, timeout_ms, resize, headers=None):
@@ -203,7 +203,7 @@ class AdaptiveImageLoader:
             return None
 
     # ============================================================
-    # Spectra‑6 enhancements
+    # Spectra-6 enhancements
     # ============================================================
 
     def _apply_unified_tonecurve(self, img, gamma):
@@ -278,10 +278,10 @@ class AdaptiveImageLoader:
         if profile["sharpness"] != 1.0:
             img = ImageEnhance.Sharpness(img).enhance(profile["sharpness"])
 
-        # Final Spectra‑6 dithering
+        # Final Spectra-6 dithering
         img = self._apply_spectra6_dither(img)
 
-        logger.info(f"Image processing complete: {dimensions} with Spectra‑6 enhancements")
+        logger.info(f"Image processing complete: {dimensions} with Spectra-6 enhancements")
         return img
 
     # ============================================================
