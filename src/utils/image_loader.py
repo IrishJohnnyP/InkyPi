@@ -41,14 +41,14 @@ class AdaptiveImageLoader:
             (1600, 1200): {
                 "saturation": 1.05,
                 "contrast": 1.1,
-                "brightness": 1.05,
+                "brightness": 1.0,
                 "sharpness": 1.0,
                 "gamma": 1.15
             },
             (800, 480): {
                 "saturation": 1.0,
                 "contrast": 1.1,
-                "brightness": 1.05,
+                "brightness": 1.0,
                 "sharpness": 1.0,
                 "gamma": 1.15
             }
