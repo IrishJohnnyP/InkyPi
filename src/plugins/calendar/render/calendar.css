@@ -1,7 +1,7 @@
 /* Map the Medium font to "normal" */
 @font-face {
     font-family: 'Barlow Condensed';
-    src: url('/static/fonts/BarlowCondensed-Medium.ttf') format('truetype');
+    src: url('../../../static/fonts/BarlowCondensed-Medium.ttf') format('truetype');
     font-weight: normal;
     font-style: normal;
 }
@@ -9,7 +9,7 @@
 /* Map the Bold font to "bold" */
 @font-face {
     font-family: 'Barlow Condensed';
-    src: url('/static/fonts/BarlowCondensed-Bold.ttf') format('truetype');
+    src: url('../../../static/fonts/BarlowCondensed-Bold.ttf') format('truetype');
     font-weight: bold;
     font-style: normal;
 }
