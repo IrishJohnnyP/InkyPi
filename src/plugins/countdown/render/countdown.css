@@ -41,6 +41,7 @@
 .subtitle {
   margin: 0 0 4dvh;
   font-size: min(5dvw, 5dvh);
+  font-weight: bold;
 }
 
 .day_count {
