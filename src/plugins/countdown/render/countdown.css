@@ -14,14 +14,14 @@
   
   /* ✅ E-ink Halo Effect: Forces a solid white outline around all text */
   text-shadow: 
-      -2px -2px 0 #FFFFFF,  
-       2px -2px 0 #FFFFFF,
-      -2px  2px 0 #FFFFFF,
-       2px  2px 0 #FFFFFF,
-       0px  2px 0 #FFFFFF,
-       2px  0px 0 #FFFFFF,
-       0px -2px 0 #FFFFFF,
-      -2px  0px 0 #FFFFFF;
+      -4px -4px 0 #FFFFFF,  
+       4px -4px 0 #FFFFFF,
+      -4px  4px 0 #FFFFFF,
+       4px  4px 0 #FFFFFF,
+       0px  4px 0 #FFFFFF,
+       4px  0px 0 #FFFFFF,
+       0px -4px 0 #FFFFFF,
+      -4px  0px 0 #FFFFFF;
 }
 
 .countdown-wrapper {
