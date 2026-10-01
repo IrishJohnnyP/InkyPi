@@ -22,6 +22,10 @@
   height: 100%;
   font-family: "Inter", sans-serif;
 
+  /* ✅ Optimizations for numerical alignment and digit legibility */
+  font-variant-numeric: tabular-nums; 
+  font-feature-settings: "cv05" 1, "tnum" 1;
+
   /* Crisp edges for e-ink rendering */
   text-rendering: auto; 
   -webkit-font-smoothing: none !important; 
@@ -337,20 +341,5 @@
   .data-points {
     grid-template-columns: repeat(3, 1fr);
     grid-template-rows: repeat(2, 1fr);
-  }
-
-}
-
-@media (min-aspect-ratio: 2) {
-  .data-points {
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-  }
-
-}
-
-@media (max-width: 250px) {
-  .weather-dashboard {
-    font-family: "Dogica";
   }
 }
