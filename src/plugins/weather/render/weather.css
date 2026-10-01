@@ -60,7 +60,7 @@
   right: 0.5dvw;
   font-size: min(2dvh, 2vw);
   text-align: right;
-  font-weight: 500;
+  font-weight: 700;
   padding: 0.3dvh 0.5dvw;
 }
 
@@ -173,7 +173,7 @@
 .data-point-label {
   font-size: min(32cqh, 15cqi);
   text-align: center;
-  font-weight: 500;
+  font-weight: 700;
   height: 30%
 }
 
@@ -184,7 +184,7 @@
   white-space: nowrap;
   align-content: center;
   height: 70%;
-  font-weight: 500;
+  font-weight: 700;
   line-height: 105%;
   display: inline-block;
 }
@@ -251,6 +251,7 @@
   min-height: 0;
   min-width: 0;
   height: 100%;
+  font-weight: 700;
   font-size: min(3dvh, 2.5vw);
 }
 
@@ -311,6 +312,7 @@
   font-size: 10cqmin;
   text-align: center;
   position: relative;
+  font-weight: 700;
   line-height: 140%;
 }
 
