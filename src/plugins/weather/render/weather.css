@@ -346,6 +346,7 @@
     grid-template-rows: repeat(2, 1fr);
   }
 }
+
 /* Apply a soft white glowing halo to all weather icons */
 .current-icon, 
 .data-point-icon, 
