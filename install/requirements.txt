@@ -4,7 +4,7 @@ inky==2.6.0
 requests==2.34.2
 urllib3==2.8.0
 werkzeug==3.1.9
-pillow==12.3.0
+pillow==13.0.0
 pi-heif==1.4.0
 pytz==2026.5
 openai==3.29.0
