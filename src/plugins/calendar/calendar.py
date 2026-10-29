@@ -32,37 +32,64 @@ class Calendar(BasePlugin):
         url_hash = hashlib.md5(calendar_url.encode()).hexdigest()
         cache_file = os.path.join(CACHE_DIR, f"{url_hash}.ics")
         
-        # Check local cache validity
-        if os.path.exists(cache_file):
-            if time.time() - os.path.getmtime(cache_file) < CACHE_TTL:
-                try:
-                    with open(cache_file, "r", encoding="utf-8") as f:
-                        ics_text = f.read()
-                        return icalendar.Calendar.from_ical(ics_text)
-                except Exception:
-                    pass
+        cached_cal = None
         
-        # Fetch fresh if cache is missing or expired
+        # 1. Attempt to load existing cache first (even if expired)
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    ics_text = f.read()
+                    cached_cal = icalendar.Calendar.from_ical(ics_text)
+                
+                # If cache is still fresh, return it immediately
+                if time.time() - os.path.getmtime(cache_file) < CACHE_TTL:
+                    return cached_cal
+            except Exception as e:
+                logger.warning(f"[{self.name}] Failed to read/parse cache for {calendar_url}: {e}")
+        
+        # 2. Fetch fresh if cache is missing, expired, or unparseable
         ics_text = self.fetch_calendar_text(calendar_url)
         if ics_text:
             try:
-                with open(cache_file, "w", encoding="utf-8") as f:
+                # Validate the iCal data BEFORE caching it
+                cal = icalendar.Calendar.from_ical(ics_text)
+                
+                # Atomic write: Write to a temp file, then replace the original
+                temp_file = cache_file + ".tmp"
+                with open(temp_file, "w", encoding="utf-8") as f:
                     f.write(ics_text)
-            except Exception:
-                pass
-            return icalendar.Calendar.from_ical(ics_text)
+                os.replace(temp_file, cache_file)
+                
+                return cal
+            except ValueError as ve:
+                logger.error(f"[{self.name}] Invalid iCalendar data received: {ve}")
+            except Exception as e:
+                logger.error(f"[{self.name}] Error saving fresh calendar data: {e}")
+        
+        # 3. Network or parsing failed. Fallback to stale cache if it exists.
+        if cached_cal:
+            logger.warning(f"[{self.name}] Fetch failed. Falling back to expired cache.")
+            return cached_cal
+            
         return None
 
     def fetch_calendar_text(self, calendar_url):
         if calendar_url.startswith("webcal://"):
             calendar_url = calendar_url.replace("webcal://", "https://")
+            
+        # Apple and Google often block the default Python requests User-Agent
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+            "Accept": "text/calendar, text/plain, */*"
+        }
+        
         try:
-            # Fail fast with a (connect, read) timeout tuple instead of hanging for 30s
-            response = requests.get(calendar_url, timeout=(3.05, 10))
+            # Slightly increased timeout to account for slower calendar servers
+            response = requests.get(calendar_url, headers=headers, timeout=(5.0, 15.0))
             response.raise_for_status()
             return response.text
-        except Exception as e:
-            logger.error(f"[{self.name}] Failed to fetch iCalendar url {calendar_url}: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[{self.name}] Network error fetching calendar {calendar_url}: {e}")
             return None
 
     def generate_image(self, settings, device_config):
@@ -119,7 +146,6 @@ class Calendar(BasePlugin):
     def fetch_ics_events(self, calendar_urls, colors, tz, start_range, end_range):
         parsed_events = []
 
-        # Concurrently fetch all configured calendars using ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=len(calendar_urls) or 1) as executor:
             future_to_url = {
                 executor.submit(self._get_cached_or_fetch_calendar, url): (url, color) 
