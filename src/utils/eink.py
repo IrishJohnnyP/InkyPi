@@ -1,11 +1,11 @@
 """Colour rendering for limited-palette e-paper displays (e.g. Inky Spectra 6).
 
 Rendering modes:
-- "photo": Floyd-Steinberg dithering towards the driver's blended palette with gentle
-  midtone lift, cool-white paper compensation, and highlight clipping.
+- "photo": Floyd-Steinberg dithering towards the driver's blended palette (controlled by
+  inky_saturation) with gentle midtone lift, cool-white paper compensation, and highlight
+  preservation—natural skin tones and smooth gradients without heavy ink clustering.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
-  palette, relative to the paper white), with balanced midtone lift, cool-white
-  compensation, and highlight preservation.
+  palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for pure UI-like images (weather, calendar, text) with colour
   adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening.
 
@@ -29,7 +29,7 @@ MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
 RENDERINGS = (PHOTO, VIVID, GRAPHICS)
 _ALIASES = {"classic": PHOTO}
 
-# Photo & Vivid rendering curves (balanced to avoid stacking on top of measured inks)
+# Photo & Vivid rendering curves
 PHOTO_GAMMA = 0.87                      # Gentle lift (1 / 1.15) for driver-blended "photo" mode
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
 PHOTO_SATURATION = 1.0                  # Measured palette + image_loader profile already supply saturation
@@ -70,7 +70,7 @@ def default_mode(plugin_id):
     return PHOTO if plugin_id in PHOTO_PLUGINS else GRAPHICS
 
 
-def detect_mode(image, photo_mode=VIVID):
+def detect_mode(image, photo_mode=PHOTO):
     """Classify an image as photo vs. pure UI graphics from pixel statistics (~2ms)."""
     if image is None:
         return photo_mode
@@ -102,7 +102,7 @@ def detect_mode(image, photo_mode=VIVID):
     return GRAPHICS if is_graphics else photo_mode
 
 
-def resolve_mode(plugin_id=None, settings=None, image=None, photo_mode=VIVID):
+def resolve_mode(plugin_id=None, settings=None, image=None, photo_mode=PHOTO):
     """Rendering algorithm: explicit setting -> plugin_id lookup -> pixel auto-detection."""
     settings = settings or {}
     mode = settings.get("colourMode")
@@ -126,9 +126,9 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
     settings = settings or {}
     image_settings = dict(image_settings) if isinstance(image_settings, dict) else {}
     saturation = _number(image_settings.get("inky_saturation"), 0.5, 0.0, 1.0)
-    preferred_photo = image_settings.get("photo_mode", VIVID)
+    preferred_photo = image_settings.get("photo_mode", PHOTO)
     if preferred_photo not in (PHOTO, VIVID):
-        preferred_photo = VIVID
+        preferred_photo = PHOTO
 
     manual = settings.get("colourMode") == MANUAL
     if manual:
