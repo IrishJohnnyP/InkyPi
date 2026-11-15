@@ -39,14 +39,14 @@ class AdaptiveImageLoader:
         # Panel-specific optical adjustments (gamma and quantization live in eink.py)
         self.display_profiles = {
             (1600, 1200): {
-                "saturation": 1.05,
-                "contrast": 1.1,
+                "saturation": 1.0,
+                "contrast": 1.0,
                 "brightness": 1.0,
                 "sharpness": 1.0,
             },
             (800, 480): {
                 "saturation": 1.0,
-                "contrast": 1.1,
+                "contrast": 1.0,
                 "brightness": 1.0,
                 "sharpness": 1.0,
             }
