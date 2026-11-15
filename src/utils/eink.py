@@ -6,12 +6,15 @@ Rendering modes:
   preservation—natural skin tones and smooth gradients without heavy ink clustering.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
-- "graphics": tuned for pure UI-like images (weather, calendar, text) with colour
-  adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening.
+- "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
+  adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening so
+  black text renders solid black instead of grey dithered dots.
 
-A display palette is described by:
-    pure:     the colours the driver expects (what each ink is called in RGB)
-    measured: what each ink actually looks like (used to adapt colours and to simulate)
+Mode selection priority:
+  1. Per-instance setting: plugin_settings["colourMode"]
+  2. Per-plugin config map: device.json -> image_settings["plugin_modes"][plugin_id]
+  3. Built-in plugin sets: PHOTO_PLUGINS / GRAPHICS_PLUGINS
+  4. Automatic pixel-statistic fallback: detect_mode(image)
 """
 
 import colorsys
@@ -45,11 +48,17 @@ MANUAL_FIELDS = {
 }
 RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.values()}
 
-# Plugins that show photographs: everything else is rendered as graphics when plugin_id is known.
+# Built-in plugin classification sets (overridable via image_settings["plugin_modes"] in device.json)
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
-    "unsplash", "apod", "wpotd", "ai_image", "comic", "screenshot", "newspaper",
-    "clock",
+    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
+    "screenshot", "newspaper", "clock",
+}
+
+GRAPHICS_PLUGINS = {
+    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
+    "college_football_rankings", "nd_football_schedule", "scoreboard",
+    "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
 # Inky Spectra 6 (E673 / EL133UF1) palettes, used as fallback or in development simulation
@@ -65,9 +74,18 @@ _BAYER8 = (np.array([
     [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21]], dtype=np.float32) + 0.5) / 64.0 - 0.5
 
 
-def default_mode(plugin_id):
-    """Recommended rendering for a plugin when plugin_id is provided."""
-    return PHOTO if plugin_id in PHOTO_PLUGINS else GRAPHICS
+def default_mode(plugin_id, image=None, photo_mode=PHOTO, plugin_modes=None):
+    """Recommended rendering for a plugin: config map -> built-in sets -> pixel auto-detection."""
+    if plugin_id:
+        if isinstance(plugin_modes, dict) and plugin_id in plugin_modes:
+            configured = _ALIASES.get(plugin_modes[plugin_id], plugin_modes[plugin_id])
+            if configured in RENDERINGS:
+                return configured
+        if plugin_id in PHOTO_PLUGINS:
+            return photo_mode
+        if plugin_id in GRAPHICS_PLUGINS:
+            return GRAPHICS
+    return detect_mode(image, photo_mode=photo_mode)
 
 
 def detect_mode(image, photo_mode=PHOTO):
@@ -102,15 +120,16 @@ def detect_mode(image, photo_mode=PHOTO):
     return GRAPHICS if is_graphics else photo_mode
 
 
-def resolve_mode(plugin_id=None, settings=None, image=None, photo_mode=PHOTO):
-    """Rendering algorithm: explicit setting -> plugin_id lookup -> pixel auto-detection."""
+def resolve_mode(plugin_id=None, settings=None, image=None, photo_mode=PHOTO, plugin_modes=None):
+    """Rendering algorithm: instance setting -> plugin map -> built-in sets -> auto-detect."""
     settings = settings or {}
     mode = settings.get("colourMode")
-    fallback = default_mode(plugin_id) if plugin_id else detect_mode(image, photo_mode=photo_mode)
+    fallback = default_mode(plugin_id, image=image, photo_mode=photo_mode, plugin_modes=plugin_modes)
 
     if mode == MANUAL:
         rendering = _ALIASES.get(settings.get("colourRendering"), settings.get("colourRendering"))
         return rendering if rendering in RENDERINGS else fallback
+    mode = _ALIASES.get(mode, mode)
     return mode if mode in RENDERINGS else fallback
 
 
@@ -129,6 +148,7 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
     preferred_photo = image_settings.get("photo_mode", PHOTO)
     if preferred_photo not in (PHOTO, VIVID):
         preferred_photo = PHOTO
+    plugin_modes = image_settings.get("plugin_modes")
 
     manual = settings.get("colourMode") == MANUAL
     if manual:
@@ -142,7 +162,13 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
         saturation = _number(settings.get("colourInk"), saturation, 0.0, 1.0)
         image_settings["inky_saturation"] = saturation
 
-    mode = resolve_mode(plugin_id, settings, image=image, photo_mode=preferred_photo)
+    mode = resolve_mode(
+        plugin_id,
+        settings,
+        image=image,
+        photo_mode=preferred_photo,
+        plugin_modes=plugin_modes,
+    )
     return {"mode": mode, "enhance": image_settings, "saturation": saturation, "manual": manual}
 
 
@@ -332,4 +358,4 @@ def perceived_palette(palette):
 def simulate(image, palette, mode, saturation=0.5):
     """What the panel will look like (measured ink colours, normalised to the paper white)."""
     indices = render_indices(image, palette, mode, saturation)
-    return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB")
+    return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB"
