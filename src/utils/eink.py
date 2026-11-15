@@ -1,20 +1,21 @@
 """Colour rendering for limited-palette e-paper displays (e.g. Inky Spectra 6).
 
 Rendering modes:
-- "photo": Floyd-Steinberg dithering towards the driver's blended palette (controlled by
-  inky_saturation) with gentle midtone lift, cool-white paper compensation, and highlight
-  preservation—natural skin tones and smooth gradients without heavy ink clustering.
+- "photo": Floyd-Steinberg dithering towards the driver's blended palette with subtle
+  pre-dither smoothing, gamut compression, calibrated saturation/contrast compensation,
+  midtone lift, cool-white paper balance, and near-white highlight clipping—smooth
+  gradients, natural skin tones, and rich colors without heavy dot grain.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
   adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening so
   black text renders solid black instead of grey dithered dots.
+- "manual": per-instance image adjustments (colourSaturation, colourContrast,
+  colourBrightness, colourSharpness) and per-instance ink blend (colourInk) over a
+  chosen rendering algorithm (colourRendering).
 
-Mode selection priority:
-  1. Per-instance setting: plugin_settings["colourMode"]
-  2. Per-plugin config map: device.json -> image_settings["plugin_modes"][plugin_id]
-  3. Built-in plugin sets: PHOTO_PLUGINS / GRAPHICS_PLUGINS
-  4. Automatic pixel-statistic fallback: detect_mode(image)
+Each mode defines its own `inky_saturation` in MODE_INK_SATURATION so the global
+`image_settings["inky_saturation"]` in device.json never overrides mode tuning.
 """
 
 import colorsys
@@ -32,12 +33,23 @@ MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
 RENDERINGS = (PHOTO, VIVID, GRAPHICS)
 _ALIASES = {"classic": PHOTO}
 
+# Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full measured/perceived ink gamut).
+# Independent of global device.json -> image_settings["inky_saturation"].
+MODE_INK_SATURATION = {
+    PHOTO: 0.65,     # Rich ink targets without darkening skin tones (~85% white on light skin)
+    GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
+    VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
+}
+
 # Photo & Vivid rendering curves
-PHOTO_GAMMA = 0.87                      # Gentle lift (1 / 1.15) for driver-blended "photo" mode
+PHOTO_GAMMA = 0.87                      # Gentle midtone lift (1 / 1.15) for e-paper shadow detail
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.0                  # Measured palette + image_loader profile already supply saturation
+PHOTO_SATURATION = 1.22                 # Restores color richness after gamma lift & blended palette
+PHOTO_CONTRAST = 1.06                   # Subtle contrast compensation for lifted midtones
+PHOTO_SMOOTH_RADIUS = 0.55              # Tames LANCZOS resize ringing & sensor noise before dithering
+GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
 WHITE_POINT_MULTS = (0.98, 1.00, 1.06)  # Cool-white paper tint compensation (R, G, B)
-HIGHLIGHT_CLIP = 248                    # Preserves highlight detail while stopping off-white stipple
+HIGHLIGHT_CLIP = 240                    # Snaps true near-white highlights to solid white paper
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -56,7 +68,7 @@ PHOTO_PLUGINS = {
 }
 
 GRAPHICS_PLUGINS = {
-    "market_snapshot", "daily_quote", "weather", "calendar", "todo_list", "countdown",
+    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
     "college_football_rankings", "nd_football_schedule", "scoreboard",
     "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
@@ -140,15 +152,33 @@ def _number(value, default, low, high):
         return default
 
 
+def mode_saturation(mode, image_settings=None):
+    """Ink saturation for a specific rendering mode, ignoring global inky_saturation."""
+    default = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
+    if isinstance(image_settings, dict):
+        overrides = image_settings.get("mode_saturation")
+        if isinstance(overrides, dict) and mode in overrides:
+            return _number(overrides[mode], default, 0.0, 1.0)
+    return default
+
+
 def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
-    """How to render an instance: algorithm, image enhancement and ink saturation."""
+    """How to render an instance: algorithm, image enhancement and mode-specific ink saturation."""
     settings = settings or {}
     image_settings = dict(image_settings) if isinstance(image_settings, dict) else {}
-    saturation = _number(image_settings.get("inky_saturation"), 0.5, 0.0, 1.0)
     preferred_photo = image_settings.get("photo_mode", PHOTO)
     if preferred_photo not in (PHOTO, VIVID):
         preferred_photo = PHOTO
     plugin_modes = image_settings.get("plugin_modes")
+
+    mode = resolve_mode(
+        plugin_id,
+        settings,
+        image=image,
+        photo_mode=preferred_photo,
+        plugin_modes=plugin_modes,
+    )
+    saturation = mode_saturation(mode, image_settings=image_settings)
 
     manual = settings.get("colourMode") == MANUAL
     if manual:
@@ -160,15 +190,8 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
                 2.0,
             )
         saturation = _number(settings.get("colourInk"), saturation, 0.0, 1.0)
-        image_settings["inky_saturation"] = saturation
 
-    mode = resolve_mode(
-        plugin_id,
-        settings,
-        image=image,
-        photo_mode=preferred_photo,
-        plugin_modes=plugin_modes,
-    )
+    image_settings["inky_saturation"] = saturation
     return {"mode": mode, "enhance": image_settings, "saturation": saturation, "manual": manual}
 
 
@@ -203,16 +226,34 @@ def _white_index(palette):
 
 
 def _apply_photo_tonecurve(image, gamma=1.0, white_point=WHITE_POINT_MULTS, highlight_clip=HIGHLIGHT_CLIP):
-    """Single-pass LUT combining gamma lift, cool-white balance, and highlight preservation."""
+    """Gamma lift, cool-white balance, and near-white highlight clipping without blowing out bright skies."""
     lut = []
     for channel_mult in white_point:
         for i in range(256):
             val = 255.0 * ((i / 255.0) ** gamma) if i > 0 else 0.0
             val *= channel_mult
-            if highlight_clip is not None and val > highlight_clip:
-                val = 255.0
             lut.append(max(0, min(255, int(round(val)))))
-    return image.point(lut)
+    image = image.point(lut)
+    if highlight_clip is not None:
+        arr = np.asarray(image, dtype=np.uint8).copy()
+        near_white = np.min(arr, axis=-1) > highlight_clip
+        arr[near_white] = 255
+        image = Image.fromarray(arr, "RGB")
+    return image
+
+
+def _compress_gamut(image, strength=GAMUT_COMPRESS_STRENGTH):
+    """Softly pull extreme out-of-gamut chroma inward so Floyd-Steinberg avoids stray opposing dots."""
+    if strength <= 0.0:
+        return image
+    arr = np.asarray(image, dtype=np.float32)
+    luma = (arr[..., 0] * 0.299 + arr[..., 1] * 0.587 + arr[..., 2] * 0.114)[..., None]
+    diff = arr - luma
+    max_chroma = np.max(np.abs(diff), axis=-1, keepdims=True)
+    excess = np.maximum(0.0, max_chroma - 110.0) / 145.0
+    scale = 1.0 - strength * excess
+    compressed = np.clip(luma + diff * scale, 0, 255).astype(np.uint8)
+    return Image.fromarray(compressed, "RGB")
 
 
 def adapt_colours(image, palette, strength=0.4, boost=1.7, min_chroma=24):
@@ -311,8 +352,10 @@ def _sharpen_edges(indices, pixels, rgb, palette, neutral_inks, edge_range=64, t
     return out
 
 
-def render_indices(image, palette, mode, saturation=0.5):
+def render_indices(image, palette, mode, saturation=None):
     """Palette indices (one per pixel) as the display will show them."""
+    if saturation is None:
+        saturation = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
     quant = blended(palette, saturation)
     if mode == GRAPHICS:
         pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
@@ -328,12 +371,19 @@ def render_indices(image, palette, mode, saturation=0.5):
 
     image = image.convert("RGB")
     if mode == VIVID:
-        quant = perceived_palette(palette)
+        pure = np.array(palette["pure"], dtype=np.float32)
+        perceived = perceived_palette(palette)
+        quant = perceived * saturation + pure * (1.0 - saturation)
         image = _apply_photo_tonecurve(image, gamma=VIVID_GAMMA)
+    else:  # PHOTO
+        if PHOTO_SMOOTH_RADIUS > 0.0:
+            image = image.filter(ImageFilter.GaussianBlur(radius=PHOTO_SMOOTH_RADIUS))
+        if PHOTO_CONTRAST != 1.0:
+            image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
         if PHOTO_SATURATION != 1.0:
             image = ImageEnhance.Color(image).enhance(PHOTO_SATURATION)
-    else:  # PHOTO
-        image = _apply_photo_tonecurve(image, gamma=PHOTO_GAMMA)
+        image = _apply_photo_tonecurve(image, gamma=PHOTO_GAMMA, highlight_clip=HIGHLIGHT_CLIP)
+        image = _compress_gamut(image, strength=GAMUT_COMPRESS_STRENGTH)
 
     pal_image = Image.new("P", (1, 1))
     pal_image.putpalette([int(v) for v in np.asarray(quant).flatten()])
@@ -355,7 +405,7 @@ def perceived_palette(palette):
     return np.clip(measured / np.maximum(white, 1) * 255.0, 0, 255)
 
 
-def simulate(image, palette, mode, saturation=0.5):
+def simulate(image, palette, mode, saturation=None):
     """What the panel will look like (measured ink colours, normalised to the paper white)."""
     indices = render_indices(image, palette, mode, saturation)
     return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB")
