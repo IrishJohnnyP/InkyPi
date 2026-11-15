@@ -63,7 +63,7 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 # Built-in plugin classification sets (overridable via image_settings["plugin_modes"] in device.json)
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
-    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
+    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic", "countdown",
     "screenshot", "newspaper", "clock", "weather", "calendar", "market_snapshot",
 }
 
