@@ -64,12 +64,12 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
     "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
-    "screenshot", "newspaper", "clock",
+    "screenshot", "newspaper", "clock", "weather", "calendar", "daily_quote",
 }
 
 GRAPHICS_PLUGINS = {
-    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
-    "daily_quote", "college_football_rankings", "nd_football_schedule",
+    "market_snapshot", "stocks", "todo_list", "text",
+    "college_football_rankings", "nd_football_schedule",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
