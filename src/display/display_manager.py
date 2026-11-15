@@ -63,13 +63,15 @@ class DisplayManager:
         else:
             raise ValueError(f"Unsupported display type: {display_type}")
 
-    def display_image(self, image, image_settings=[]):
+    def display_image(self, image, image_settings=[], plugin_id=None, plugin_settings=None):
         """
         Delegates image rendering to the appropriate display instance.
 
         Args:
             image (PIL.Image): The image to be displayed.
             image_settings (list, optional): List of layout flags (e.g. 'keep-width').
+            plugin_id (str, optional): Active plugin identifier for mode routing.
+            plugin_settings (dict, optional): Active plugin instance settings.
 
         Raises:
             ValueError: If no valid display instance is found.
@@ -93,7 +95,13 @@ class DisplayManager:
 
         # Route Spectra 6 displays through eink.py; use legacy G/B boost only for other displays
         if getattr(self.display, "spectra_palette", None) is not None:
-            plan = eink.colour_plan(image_settings=global_image_settings, image=image)
+            plan = eink.colour_plan(
+                plugin_id=plugin_id,
+                settings=plugin_settings,
+                image_settings=global_image_settings,
+                image=image,
+            )
+            logger.info(f"Spectra 6 colour plan (plugin={plugin_id}): mode={plan['mode']}")
             self.display.display_image(image, image_settings=image_settings, colour_plan=plan)
         else:
             image = boost_blue_green_channels(image)
