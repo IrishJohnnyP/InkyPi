@@ -64,7 +64,7 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
     "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic", "countdown",
-    "screenshot", "newspaper", "clock", "weather", "calendar", "market_snapshot",
+    "screenshot", "newspaper", "clock", "weather", "calendar",
 }
 
 GRAPHICS_PLUGINS = {
