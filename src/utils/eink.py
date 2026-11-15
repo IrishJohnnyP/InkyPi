@@ -4,8 +4,8 @@ Rendering modes:
 - "photo": Floyd-Steinberg dithering towards the driver's blended palette with gentle
   midtone lift, cool-white paper compensation, and highlight clipping.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
-  palette, relative to the paper white), with midtone lift, cool-white compensation,
-  highlight clipping, and hybrid text-edge sharpening for overlaid typography.
+  palette, relative to the paper white), with balanced midtone lift, cool-white
+  compensation, and highlight preservation.
 - "graphics": tuned for pure UI-like images (weather, calendar, text) with colour
   adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening.
 
@@ -29,12 +29,12 @@ MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
 RENDERINGS = (PHOTO, VIVID, GRAPHICS)
 _ALIASES = {"classic": PHOTO}
 
-# Photo & Vivid rendering curves
+# Photo & Vivid rendering curves (balanced to avoid stacking on top of measured inks)
 PHOTO_GAMMA = 0.87                      # Gentle lift (1 / 1.15) for driver-blended "photo" mode
-VIVID_GAMMA = 0.75                      # Midtone lift for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.15
+VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
+PHOTO_SATURATION = 1.0                  # Measured palette + image_loader profile already supply saturation
 WHITE_POINT_MULTS = (0.98, 1.00, 1.06)  # Cool-white paper tint compensation (R, G, B)
-HIGHLIGHT_CLIP = 240                    # Prevents stray dither stippling on near-white skies/backdrops
+HIGHLIGHT_CLIP = 248                    # Preserves highlight detail while stopping off-white stipple
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -304,32 +304,15 @@ def render_indices(image, palette, mode, saturation=0.5):
     if mode == VIVID:
         quant = perceived_palette(palette)
         image = _apply_photo_tonecurve(image, gamma=VIVID_GAMMA)
-        image = ImageEnhance.Color(image).enhance(PHOTO_SATURATION)
+        if PHOTO_SATURATION != 1.0:
+            image = ImageEnhance.Color(image).enhance(PHOTO_SATURATION)
     else:  # PHOTO
         image = _apply_photo_tonecurve(image, gamma=PHOTO_GAMMA)
 
     pal_image = Image.new("P", (1, 1))
     pal_image.putpalette([int(v) for v in np.asarray(quant).flatten()])
     quantized = image.quantize(len(quant), palette=pal_image, dither=Image.Dither.FLOYDSTEINBERG)
-    indices = np.asarray(quantized, dtype=np.uint8)
-
-    # Hybrid pass: keep Floyd-Steinberg on the photo, but snap crisp white/black
-    # overlaid text edges so small fonts don't break into dithered dots.
-    if mode == VIVID:
-        pixels = np.asarray(image, dtype=np.uint8)
-        neutral_inks = _neutral_inks(palette)
-        indices = _sharpen_edges(
-            indices,
-            pixels,
-            pixels.astype(np.float32),
-            palette,
-            neutral_inks,
-            edge_range=125,
-            text_threshold=170,
-            neutral_chroma=20,
-        )
-
-    return indices
+    return np.asarray(quantized, dtype=np.uint8)
 
 
 def to_pure_palette_image(indices, palette):
