@@ -68,8 +68,8 @@ PHOTO_PLUGINS = {
 }
 
 GRAPHICS_PLUGINS = {
-    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
-    "daily_quote", "college_football_rankings", "nd_football_schedule",
+    "stocks", "todo_list", "text",
+    "college_football_rankings", "nd_football_schedule",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
