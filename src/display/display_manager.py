@@ -101,7 +101,10 @@ class DisplayManager:
                 image_settings=global_image_settings,
                 image=image,
             )
-            logger.info(f"Spectra 6 colour plan (plugin={plugin_id}): mode={plan['mode']}")
+            logger.info(
+                f"Spectra 6 colour plan (plugin={plugin_id}): "
+                f"mode={plan['mode']}, saturation={plan['saturation']:.2f}"
+            )
             self.display.display_image(image, image_settings=image_settings, colour_plan=plan)
         else:
             image = boost_blue_green_channels(image)
