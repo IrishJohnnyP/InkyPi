@@ -3,8 +3,8 @@
 Rendering modes:
 - "photo": Floyd-Steinberg dithering towards the driver's blended palette with subtle
   pre-dither smoothing, gamut compression, calibrated saturation/contrast compensation,
-  midtone lift, cool-white paper balance, and near-white highlight clipping—smooth
-  gradients, natural skin tones, and rich colors without heavy dot grain.
+  gentle midtone lift, cool-white paper balance, and near-white highlight clipping—warm
+  natural skin tones, clear light blues, and luminous reds without heavy dot grain.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
@@ -36,15 +36,15 @@ _ALIASES = {"classic": PHOTO}
 # Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full measured/perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
-    PHOTO: 0.65,     # Rich ink targets without darkening skin tones (~85% white on light skin)
+    PHOTO: 0.42,     # Keeps White reference high enough (~215) so skin & sky retain warm/blue stipple
     GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
     VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
 }
 
 # Photo & Vivid rendering curves
-PHOTO_GAMMA = 0.87                      # Gentle midtone lift (1 / 1.15) for e-paper shadow detail
+PHOTO_GAMMA = 0.94                      # Subtle midtone lift (avoids pushing skin/sky into bare white)
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.22                 # Restores color richness after gamma lift & blended palette
+PHOTO_SATURATION = 1.24                 # Warm skin stippling + crisp light blues and rich foliage
 PHOTO_CONTRAST = 1.06                   # Subtle contrast compensation for lifted midtones
 PHOTO_SMOOTH_RADIUS = 0.55              # Tames LANCZOS resize ringing & sensor noise before dithering
 GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
