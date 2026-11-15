@@ -69,8 +69,8 @@ PHOTO_PLUGINS = {
 
 GRAPHICS_PLUGINS = {
     "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
-    "college_football_rankings", "nd_football_schedule", "scoreboard",
-    "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
+    "daily_quote", "college_football_rankings", "nd_football_schedule",
+    "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
 # Inky Spectra 6 (E673 / EL133UF1) palettes, used as fallback or in development simulation
