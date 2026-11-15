@@ -209,6 +209,32 @@ class AdaptiveImageLoader:
             return None
 
     # ============================================================
+    # Backward-compatible no-op shims (quantization lives in eink.py)
+    # ============================================================
+
+    def _apply_unified_tonecurve(self, img, gamma=1.15):
+        """Backward-compatible no-op: tone curve is applied downstream by eink.py."""
+        return img
+
+    def _spectra6_palette(self):
+        palette_data = [
+            0, 0, 0,         # Black
+            255, 255, 255,   # Pure White
+            255, 0, 0,       # Red
+            255, 255, 0,     # Yellow
+            0, 255, 0,       # Green
+            0, 0, 255        # Blue
+        ]
+        palette_data += [0] * (768 - len(palette_data))
+        palette_img = Image.new('P', (1, 1))
+        palette_img.putpalette(palette_data)
+        return palette_img
+
+    def _apply_spectra6_dither(self, img):
+        """Backward-compatible no-op for base_plugin.py: final quantization is handled by eink.py."""
+        return img
+
+    # ============================================================
     # Shared processing logic
     # ============================================================
 
