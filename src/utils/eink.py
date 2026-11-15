@@ -358,4 +358,4 @@ def perceived_palette(palette):
 def simulate(image, palette, mode, saturation=0.5):
     """What the panel will look like (measured ink colours, normalised to the paper white)."""
     indices = render_indices(image, palette, mode, saturation)
-    return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB"
+    return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB")
