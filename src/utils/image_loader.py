@@ -1,7 +1,7 @@
 """
 Adaptive Image Loader for InkyPi
-Enhanced with Spectra 6 white-point compensation, improved dithering,
-highlight preservation, and hardware-accurate palette mapping.
+Handles memory-safe fetching, EXIF orientation, resizing, and panel-size
+micro-calibration, returning an undithered RGB image for eink.py.
 """
 
 from PIL import Image, ImageOps, ImageEnhance
@@ -36,21 +36,19 @@ class AdaptiveImageLoader:
     def __init__(self):
         self.is_low_resource = _is_low_resource_device()
 
-        # Hardware-specific calibrations
+        # Panel-specific optical adjustments (gamma and quantization live in eink.py)
         self.display_profiles = {
             (1600, 1200): {
                 "saturation": 1.05,
                 "contrast": 1.1,
                 "brightness": 1.0,
                 "sharpness": 1.0,
-                "gamma": 1.15
             },
             (800, 480): {
                 "saturation": 1.0,
                 "contrast": 1.1,
                 "brightness": 1.0,
                 "sharpness": 1.0,
-                "gamma": 1.15
             }
         }
 
@@ -92,6 +90,8 @@ class AdaptiveImageLoader:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
             return img
         except Exception as e:
@@ -146,6 +146,8 @@ class AdaptiveImageLoader:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
             return img
 
@@ -179,6 +181,8 @@ class AdaptiveImageLoader:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
             return img
 
@@ -195,6 +199,8 @@ class AdaptiveImageLoader:
                 img = self._process_and_resize(img, dimensions, original_size)
             else:
                 img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
             return img
 
@@ -203,53 +209,13 @@ class AdaptiveImageLoader:
             return None
 
     # ============================================================
-    # Spectra-6 enhancements
-    # ============================================================
-
-    def _apply_unified_tonecurve(self, img, gamma):
-        """Applies Gamma, White-Point, and Highlight Clipping in a single RAM-efficient pass."""
-        lut = []
-        # Multipliers for R, G, B (Cool White compensation)
-        for channel_mult in (0.98, 1.00, 1.06): 
-            for i in range(256):
-                # 1. Apply Gamma
-                val = 255 * (i / 255.0) ** (1.0 / gamma) if i > 0 else 0
-                # 2. Apply White Point Shift
-                val = val * channel_mult
-                # 3. Preserve Highlights (Force to pure white paper for values > 240)
-                val = 255 if val > 240 else val
-                # 4. Clamp to 0-255 bounds
-                lut.append(max(0, min(255, int(val))))
-        
-        return img.point(lut)
-
-    def _spectra6_palette(self):
-        # Hardware palette MUST remain pure to prevent dither stippling in white areas
-        palette_data = [
-            0, 0, 0,         # Black
-            255, 255, 255,   # Pure White
-            255, 0, 0,       # Red
-            255, 255, 0,     # Yellow
-            0, 255, 0,       # Green
-            0, 0, 255        # Blue
-        ]
-        palette_data += [0] * (768 - len(palette_data))
-        palette_img = Image.new('P', (1, 1))
-        palette_img.putpalette(palette_data)
-        return palette_img
-
-    def _apply_spectra6_dither(self, img):
-        palette_img = self._spectra6_palette()
-        return img.quantize(palette=palette_img, dither=Image.FLOYDSTEINBERG).convert('RGB')
-
-    # ============================================================
     # Shared processing logic
     # ============================================================
 
-    def _process_and_resize(self, img, dimensions, original_size):
+    def _process_and_resize(self, img, dimensions, original_size=None):
         img = ImageOps.exif_transpose(img)
 
-        if img.mode in ('RGBA', 'LA', 'P'):
+        if img.mode != 'RGB':
             img = img.convert('RGB')
 
         if self.is_low_resource:
@@ -257,11 +223,7 @@ class AdaptiveImageLoader:
         else:
             img = self._resize_high_performance(img, dimensions)
 
-        # Apply Gamma, White-Point, and Highlights efficiently via unified LUT
-        gamma = self.display_profiles.get(dimensions, {}).get("gamma", 1.15)
-        img = self._apply_unified_tonecurve(img, gamma)
-
-        # Saturation / contrast / brightness / sharpness
+        # Panel-size saturation / contrast / brightness / sharpness
         profile = self.display_profiles.get(dimensions, {
             "saturation": 1.0,
             "contrast": 1.0,
@@ -278,10 +240,7 @@ class AdaptiveImageLoader:
         if profile["sharpness"] != 1.0:
             img = ImageEnhance.Sharpness(img).enhance(profile["sharpness"])
 
-        # Final Spectra-6 dithering
-        img = self._apply_spectra6_dither(img)
-
-        logger.info(f"Image processing complete: {dimensions} with Spectra-6 enhancements")
+        logger.info(f"Image processing complete: {dimensions} (undithered RGB for eink.py)")
         return img
 
     # ============================================================
