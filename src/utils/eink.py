@@ -1,15 +1,15 @@
 """Colour rendering for limited-palette e-paper displays (e.g. Inky Spectra 6).
 
 Rendering modes:
-- "photo": Floyd-Steinberg dithering towards the driver's blended palette with subtle
+- "photo": Floyd-Steinberg dithering towards the driver's blended palette with light
   pre-dither smoothing, gamut compression, calibrated saturation/contrast compensation,
-  gentle midtone lift, cool-white paper balance, and near-white highlight clipping—warm
-  natural skin tones, clear light blues, and luminous reds without heavy dot grain.
+  subtle midtone lift, neutral-warm highlight balance, and near-white highlight clipping—
+  preserving pale yellows/oranges, sky blues, warm skin tones, and fine light details.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
-  adaptation, palette snapping, 8x8 Bayer ordered dithering, and edge sharpening so
-  black text renders solid black instead of grey dithered dots.
+  adaptation, tight palette snapping (preserving subtle card borders and pale tints),
+  8x8 Bayer ordered dithering, and edge sharpening so black text renders solid black.
 - "manual": per-instance image adjustments (colourSaturation, colourContrast,
   colourBrightness, colourSharpness) and per-instance ink blend (colourInk) over a
   chosen rendering algorithm (colourRendering).
@@ -36,20 +36,20 @@ _ALIASES = {"classic": PHOTO}
 # Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full measured/perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
-    PHOTO: 0.42,     # Keeps White reference high enough (~215) so skin & sky retain warm/blue stipple
+    PHOTO: 0.35,     # Raises White ceiling (~223) so pale yellow/orange, sky blue & light details survive
     GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
     VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
 }
 
 # Photo & Vivid rendering curves
-PHOTO_GAMMA = 0.94                      # Subtle midtone lift (avoids pushing skin/sky into bare white)
+PHOTO_GAMMA = 0.96                      # Gentle midtone lift without blowing out pale yellows/highlights
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.24                 # Warm skin stippling + crisp light blues and rich foliage
+PHOTO_SATURATION = 1.25                 # Preserves pale yellow/orange stippling, sky blues & warm skin
 PHOTO_CONTRAST = 1.06                   # Subtle contrast compensation for lifted midtones
-PHOTO_SMOOTH_RADIUS = 0.55              # Tames LANCZOS resize ringing & sensor noise before dithering
+PHOTO_SMOOTH_RADIUS = 0.30              # Light pre-dither smoothing that preserves fine highlight details
 GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
-WHITE_POINT_MULTS = (0.98, 1.00, 1.06)  # Cool-white paper tint compensation (R, G, B)
-HIGHLIGHT_CLIP = 240                    # Snaps true near-white highlights to solid white paper
+WHITE_POINT_MULTS = (1.00, 1.00, 1.01)  # Neutral white balance (avoids cutting Red/boosting Blue on yellows)
+HIGHLIGHT_CLIP = 248                    # Only clips true specular/paper whites (>248), keeping light details
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -63,13 +63,13 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 # Built-in plugin classification sets (overridable via image_settings["plugin_modes"] in device.json)
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
-    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic", "countdown",
-    "screenshot", "newspaper", "clock", "weather", "calendar",
+    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
+    "screenshot", "newspaper", "clock",
 }
 
 GRAPHICS_PLUGINS = {
-    "stocks", "todo_list", "text",
-    "college_football_rankings", "nd_football_schedule",
+    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
+    "daily_quote", "college_football_rankings", "nd_football_schedule",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
@@ -226,7 +226,7 @@ def _white_index(palette):
 
 
 def _apply_photo_tonecurve(image, gamma=1.0, white_point=WHITE_POINT_MULTS, highlight_clip=HIGHLIGHT_CLIP):
-    """Gamma lift, cool-white balance, and near-white highlight clipping without blowing out bright skies."""
+    """Gamma lift, neutral-white balance, and near-white highlight clipping without blowing out light tones."""
     lut = []
     for channel_mult in white_point:
         for i in range(256):
@@ -298,8 +298,8 @@ def _distances(rgb, quant_palette):
     return dist
 
 
-def _snap(rgb, quant_palette, threshold=48):
-    """Pixels within `threshold` of a quantization colour become exactly that colour."""
+def _snap(rgb, quant_palette, threshold=26):
+    """Pixels within `threshold` of a quantization colour become exactly that colour (tight enough to keep subtle light borders/tints)."""
     dist = _distances(rgb, quant_palette)
     nearest = dist.argmin(-1)
     close = dist.min(-1) <= threshold ** 2
