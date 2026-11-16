@@ -2,9 +2,9 @@
 
 Rendering modes:
 - "photo": Floyd-Steinberg dithering towards the driver's blended palette with light
-  pre-dither smoothing, gamut compression, calibrated saturation/contrast compensation,
-  subtle midtone lift, neutral-warm highlight balance, and near-white highlight clipping—
-  preserving pale yellows/oranges, sky blues, warm skin tones, and fine light details.
+  pre-dither smoothing, gamut compression, calibrated saturation compensation, and a
+  highlight-anchored luminance shadow/midtone lift—brightening dark shadows and indoor
+  midtones while keeping faces, pale yellows/oranges, sky blues, and light details intact.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
@@ -42,10 +42,12 @@ MODE_INK_SATURATION = {
 }
 
 # Photo & Vivid rendering curves
-PHOTO_GAMMA = 0.96                      # Gentle midtone lift without blowing out pale yellows/highlights
+PHOTO_SHADOW_LIFT = 0.28                # Opens up dark shadows & indoor scenes (peaks around RGB 60-90)
+PHOTO_MID_LIFT = 0.06                   # Gentle boost for lower midtones (RGB 90-160)
+PHOTO_LIFT_KNEE = 0.72                  # Tapers lift smoothly to 0 above luma 184 (~0.72*255) so highlights/faces stay intact
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
 PHOTO_SATURATION = 1.25                 # Preserves pale yellow/orange stippling, sky blues & warm skin
-PHOTO_CONTRAST = 1.06                   # Subtle contrast compensation for lifted midtones
+PHOTO_CONTRAST = 1.00                   # Neutral contrast (1.06 was darkening shadows below 128)
 PHOTO_SMOOTH_RADIUS = 0.30              # Light pre-dither smoothing that preserves fine highlight details
 GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
 WHITE_POINT_MULTS = (1.00, 1.00, 1.01)  # Neutral white balance (avoids cutting Red/boosting Blue on yellows)
@@ -64,12 +66,12 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
     "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
-    "screenshot", "newspaper", "clock", "weather", "calendar", "daily_quote",
+    "screenshot", "newspaper", "clock",
 }
 
 GRAPHICS_PLUGINS = {
-    "market_snapshot", "stocks", "todo_list", "text",
-    "college_football_rankings", "nd_football_schedule",
+    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
+    "daily_quote", "college_football_rankings", "nd_football_schedule",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
@@ -225,8 +227,23 @@ def _white_index(palette):
     return int(np.argmax(pure.sum(axis=1)))
 
 
+def _lift_shadows_luma(image, shadow_lift=PHOTO_SHADOW_LIFT, mid_lift=PHOTO_MID_LIFT, knee=PHOTO_LIFT_KNEE):
+    """Lift dark shadow and lower-midtone luminance while leaving highlights, faces & light colors untouched."""
+    if shadow_lift <= 0.0 and mid_lift <= 0.0:
+        return image
+    arr = np.asarray(image, dtype=np.float32) / 255.0
+    luma = arr[..., 0] * 0.299 + arr[..., 1] * 0.587 + arr[..., 2] * 0.114
+    t = np.clip(luma / knee, 0.0, 1.0)
+    w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
+    boost = shadow_lift * (np.maximum(luma, 1e-4) ** 0.65) * w + mid_lift * np.sin(np.pi * t) * (1.0 - t)
+    new_luma = np.clip(luma + boost, 0.0, 1.0)
+    delta = (new_luma - luma)[..., None]
+    lifted = np.clip((arr + delta) * 255.0, 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(lifted, "RGB")
+
+
 def _apply_photo_tonecurve(image, gamma=1.0, white_point=WHITE_POINT_MULTS, highlight_clip=HIGHLIGHT_CLIP):
-    """Gamma lift, neutral-white balance, and near-white highlight clipping without blowing out light tones."""
+    """Optional gamma lift, neutral-white balance, and near-white highlight clipping without blowing out light tones."""
     lut = []
     for channel_mult in white_point:
         for i in range(256):
@@ -382,7 +399,8 @@ def render_indices(image, palette, mode, saturation=None):
             image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
         if PHOTO_SATURATION != 1.0:
             image = ImageEnhance.Color(image).enhance(PHOTO_SATURATION)
-        image = _apply_photo_tonecurve(image, gamma=PHOTO_GAMMA, highlight_clip=HIGHLIGHT_CLIP)
+        image = _lift_shadows_luma(image)
+        image = _apply_photo_tonecurve(image, gamma=1.0, highlight_clip=HIGHLIGHT_CLIP)
         image = _compress_gamut(image, strength=GAMUT_COMPRESS_STRENGTH)
 
     pal_image = Image.new("P", (1, 1))
