@@ -1,11 +1,10 @@
 """Colour rendering for limited-palette e-paper displays (e.g. Inky Spectra 6).
 
 Rendering modes:
-- "photo": Floyd-Steinberg dithering towards the driver's blended palette with light
-  pre-dither smoothing, gamut compression, calibrated saturation compensation, a
-  highlight-anchored multiplicative shadow/midtone lift, and pigment-aware Blue/Green
-  tuning (deepening blues so skies/water don't wash out, and curbing Red/Blue cross-dither
-  in greens so foliage renders clean green instead of grey).
+- "photo": Floyd-Steinberg dithering towards the driver's blended palette with
+  edge-preserving flat-area noise smoothing, gamut compression, calibrated saturation,
+  a highlight-anchored multiplicative shadow/midtone lift, and sub-palette hue alignment
+  so each region dithers with 1-2 harmonizing inks rather than multi-ink confetti dots.
 - "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
   palette, relative to the paper white) for high-punch landscapes/illustrations.
 - "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
@@ -37,22 +36,22 @@ _ALIASES = {"classic": PHOTO}
 # Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full measured/perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
-    PHOTO: 0.35,     # Raises White ceiling (~223) so pale yellow/orange, sky blue & light details survive
+    PHOTO: 0.45,     # Balances bright highlights with deeper, cleaner Blue/Green ink separation
     GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
     VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
 }
 
 # Photo & Vivid rendering curves
-PHOTO_SHADOW_LIFT = 0.25                # Opens up dark shadows & indoor scenes without adding grey
-PHOTO_MID_LIFT = 0.05                   # Gentle boost for lower midtones
+PHOTO_SHADOW_LIFT = 0.24                # Opens up dark shadows & indoor scenes without adding grey
+PHOTO_MID_LIFT = 0.04                   # Gentle boost for lower midtones
 PHOTO_LIFT_KNEE = 0.72                  # Tapers lift smoothly to 0 above luma 184 (~0.72*255) so highlights/faces stay intact
-PHOTO_BLUE_DARKEN = 0.26                # Deepens blue-dominant pixels to match dark physical Blue pigment
-PHOTO_GREEN_DARKEN = 0.07               # Slightly deepens greens so foliage lays down richer green ink
-PHOTO_GREEN_CLEAN = 0.28                # Suppresses minor Red/Blue channels in green pixels so foliage doesn't dither grey
+PHOTO_BLUE_DARKEN = 0.22                # Deepens mid/deep blues while keeping sky highlights airy
+PHOTO_GREEN_DARKEN = 0.06               # Slightly deepens greens so foliage locks onto solid green ink
 VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.25                 # Preserves pale yellow/orange stippling, sky blues & warm skin
-PHOTO_CONTRAST = 1.00                   # Neutral contrast (1.06 was darkening shadows below 128)
-PHOTO_SMOOTH_RADIUS = 0.30              # Light pre-dither smoothing that preserves fine highlight details
+PHOTO_SATURATION = 1.12                 # Calibrated saturation (1.25 over-amplified sensor grain into dither dots)
+PHOTO_CONTRAST = 1.00                   # Neutral contrast
+PHOTO_DENOISE_STRENGTH = 0.75           # Edge-preserving flat-area smoothing (melts grain in skin/sky/walls, keeps edges sharp)
+PHOTO_DENOISE_EDGE = 18.0               # Local RGB diff threshold above which edges/eyelashes/text are left untouched
 GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
 HIGHLIGHT_CLIP = 248                    # Only clips true specular/paper whites (>248), keeping light details
@@ -70,12 +69,12 @@ RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.va
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
     "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
-    "screenshot", "newspaper", "clock",
+    "screenshot", "newspaper", "clock", "daily_quote", "weather", "calendar",
 }
 
 GRAPHICS_PLUGINS = {
-    "market_snapshot", "stocks", "weather", "calendar", "todo_list", "text",
-    "daily_quote", "college_football_rankings", "nd_football_schedule",
+    "market_snapshot", "todo_list", "text",
+    "college_football_rankings", "nd_football_schedule",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
 }
 
@@ -231,6 +230,19 @@ def _white_index(palette):
     return int(np.argmax(pure.sum(axis=1)))
 
 
+def _smooth_flat_areas(image, strength=PHOTO_DENOISE_STRENGTH, edge_threshold=PHOTO_DENOISE_EDGE):
+    """Edge-preserving noise reduction: smooths grain in flat skin/sky/walls while keeping edges sharp."""
+    if strength <= 0.0:
+        return image
+    blurred = image.filter(ImageFilter.BoxBlur(1))
+    orig_f = np.asarray(image, dtype=np.float32)
+    blur_f = np.asarray(blurred, dtype=np.float32)
+    diff = np.abs(orig_f - blur_f).max(axis=-1, keepdims=True)
+    weight = strength * np.clip(1.0 - (diff - 5.0) / edge_threshold, 0.0, 1.0)
+    out = np.clip(orig_f + weight * (blur_f - orig_f), 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(out, "RGB")
+
+
 def _tune_photo_tones_and_colours(
     image,
     shadow_lift=PHOTO_SHADOW_LIFT,
@@ -238,48 +250,63 @@ def _tune_photo_tones_and_colours(
     knee=PHOTO_LIFT_KNEE,
     blue_darken=PHOTO_BLUE_DARKEN,
     green_darken=PHOTO_GREEN_DARKEN,
-    green_clean=PHOTO_GREEN_CLEAN,
 ):
     """
     1. Multiplicative highlight-anchored shadow/midtone lift: brightens dark shadows and
-       indoor midtones without adding grey into saturated greens/blues or washing out highlights.
-    2. Pigment-aware Blue & Green adjustment:
-       - Deepens blue-dominant tones so skies, water, and blue clothing don't dither overly light.
-       - Cleans minor Red/Blue contamination in green-dominant pixels so foliage dithers with
-         pure Green/Black/Yellow rather than Red+Blue (which looks grey).
+       indoor midtones without adding grey or washing out highlights.
+    2. Blue & Green depth adjustment + sub-palette hue alignment so Floyd-Steinberg
+       dithers each region with 1-2 harmonizing inks instead of multi-ink confetti dots:
+       - Blue-dominant pixels equalize R & G so skies/water dither cleanly with {Blu, Wht, Blk}
+         (eliminating stray Green/Red dots inside blues).
+       - Green-dominant pixels align R & B onto {Grn, Blk, Wht, Yel} so foliage dithers cleanly
+         with Green + Black/Yellow/White (eliminating stray Blue/Red confetti in greens).
+       - Warm/skin pixels keep B <= 0.92*G so skin and warm wood avoid Blue/Green speckles.
     """
     arr = np.asarray(image, dtype=np.float32) / 255.0
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
     luma = r * 0.299 + g * 0.587 + b * 0.114
 
+    # 1. Multiplicative shadow/midtone lift tapered to 0 above knee
     if shadow_lift > 0.0 or mid_lift > 0.0:
         t = np.clip(luma / knee, 0.0, 1.0)
         w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
         boost = shadow_lift * (np.maximum(luma, 1e-4) ** 0.65) * w + mid_lift * np.sin(np.pi * t) * (1.0 - t)
-        scale = np.minimum((luma + boost) / np.maximum(luma, 1e-4), 2.2)
+        scale = np.minimum((luma + boost) / np.maximum(luma, 1e-4), 2.1)
         arr = np.clip(arr * scale[..., None], 0.0, 1.0)
         r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
 
+    # 2. Blue deepening (gentle on bright sky, deeper on mid/dark blue) + R/G alignment
+    max_rg = np.maximum(r, g)
+    blue_dom = np.clip((b - max_rg) / 0.25, 0.0, 1.0)
     if blue_darken > 0.0:
-        max_rg = np.maximum(r, g)
-        blue_dom = np.clip((b - max_rg) / 0.28, 0.0, 1.0)
         blue_luma = r * 0.299 + g * 0.587 + b * 0.114
-        blue_weight = blue_dom * np.clip(1.20 - 0.55 * blue_luma, 0.45, 1.0)
+        blue_weight = blue_dom * np.clip(1.15 - 0.75 * blue_luma, 0.20, 1.0)
         arr = arr * (1.0 - blue_darken * blue_weight)[..., None]
         r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    blue_align = np.clip((b - np.maximum(r, g)) / 0.12, 0.0, 1.0)
+    rg_mid = 0.5 * (r + g)
+    r = r + blue_align * (rg_mid - r)
+    g = g + blue_align * (rg_mid - g)
 
-    if green_darken > 0.0 or green_clean > 0.0:
-        max_rb = np.maximum(r, b)
-        green_dom = np.clip((g - max_rb) / 0.28, 0.0, 1.0)
-        if green_darken > 0.0:
-            arr = arr * (1.0 - green_darken * green_dom)[..., None]
-            r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-        if green_clean > 0.0:
-            clean_factor = 1.0 - green_clean * green_dom
-            arr[..., 0] = r * clean_factor
-            arr[..., 2] = b * clean_factor
+    # 3. Green alignment onto {Grn, Blk, Wht, Yel}
+    max_rb = np.maximum(r, b)
+    green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
+    g_adj = g * (1.0 - green_darken * green_dom) if green_darken > 0.0 else g
+    pastel = np.clip((g_adj - 0.68) / 0.32, 0.0, 1.0)
+    b_clean = g_adj * (0.18 + 0.55 * pastel)
+    warm_offset = np.clip(r - b, 0.0, 0.25 * g_adj)
+    r_clean = np.minimum(b_clean + warm_offset, 0.85 * g_adj)
+    r = r + green_dom * (r_clean - r)
+    g = g + green_dom * (g_adj - g)
+    b = b + green_dom * (b_clean - b)
 
-    return Image.fromarray(np.clip(arr * 255.0, 0.0, 255.0).astype(np.uint8), "RGB")
+    # 4. Warm / Skin alignment onto {Red, Yel, Wht, Blk}
+    warm_mask = np.clip((r - np.maximum(g, b)) / 0.12, 0.0, 1.0) * np.clip((g - b + 0.04) / 0.08, 0.0, 1.0)
+    b_warm = np.minimum(b, g * 0.92)
+    b = b + warm_mask * (b_warm - b)
+
+    out = np.stack([r, g, b], axis=-1)
+    return Image.fromarray(np.clip(out * 255.0, 0.0, 255.0).astype(np.uint8), "RGB")
 
 
 def _apply_photo_tonecurve(image, gamma=1.0, white_point=WHITE_POINT_MULTS, highlight_clip=HIGHLIGHT_CLIP):
@@ -433,8 +460,7 @@ def render_indices(image, palette, mode, saturation=None):
         quant = perceived * saturation + pure * (1.0 - saturation)
         image = _apply_photo_tonecurve(image, gamma=VIVID_GAMMA)
     else:  # PHOTO
-        if PHOTO_SMOOTH_RADIUS > 0.0:
-            image = image.filter(ImageFilter.GaussianBlur(radius=PHOTO_SMOOTH_RADIUS))
+        image = _smooth_flat_areas(image)
         if PHOTO_CONTRAST != 1.0:
             image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
         if PHOTO_SATURATION != 1.0:
