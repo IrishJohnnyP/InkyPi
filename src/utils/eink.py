@@ -5,11 +5,14 @@ Rendering modes:
   perceptual shadow/midtone lift, soft-knee gamut compression, sub-palette hue
   alignment, and paper-white highlight clip) paired with edge-preserving flat-area
   noise smoothing and calibrated dual-palette Floyd-Steinberg dithering.
+- "hybrid": OKLab 3D LUT + calibrated Floyd-Steinberg dithering for photographic
+  backgrounds combined with post-quantization UI ink locking so typography, zero-blur
+  text halos, borders, and primary accent fills render solid without dither bleed.
 - "vivid": High-punch OKLab 3D LUT + full perceived ink gamut dithering for
   landscapes and illustrations.
-- "graphics": Tuned for UI-like images (weather, calendar, charts, text) with colour
-  adaptation, tight palette snapping (preserving subtle card borders and pale tints),
-  8x8 Bayer ordered dithering, and edge sharpening so black text renders solid black.
+- "graphics": Tuned for flat-colour UI dashboards (todo lists, plain-colour cards)
+  with colour adaptation, tight palette snapping, 8x8 Bayer ordered dithering, and
+  edge sharpening.
 - "manual": Per-instance image adjustments (colourSaturation, colourContrast,
   colourBrightness, colourSharpness) and per-instance ink blend (colourInk) over a
   chosen rendering algorithm (colourRendering).
@@ -25,16 +28,17 @@ from PIL import Image, ImageEnhance, ImageFilter
 
 logger = logging.getLogger(__name__)
 
-PHOTO, VIVID, GRAPHICS, MANUAL = "photo", "vivid", "graphics", "manual"
-MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
-RENDERINGS = (PHOTO, VIVID, GRAPHICS)
-_ALIASES = {"classic": PHOTO}
+PHOTO, VIVID, GRAPHICS, HYBRID, MANUAL = "photo", "vivid", "graphics", "hybrid", "manual"
+MODES = (PHOTO, VIVID, GRAPHICS, HYBRID, MANUAL)
+RENDERINGS = (PHOTO, VIVID, GRAPHICS, HYBRID)
+_ALIASES = {"classic": PHOTO, "mixed": HYBRID, "overlay": HYBRID}
 
 # Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full calibrated perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
     PHOTO: 1.00,     # Dithers 100% against calibrated physical ink targets without pure-primary skew
-    GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
+    HYBRID: 1.00,    # Same calibrated photo dithering on backgrounds, with UI ink lock on top
+    GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on flat UI dashboards
     VIVID: 1.00,     # Full calibrated perceived ink gamut
 }
 
@@ -67,17 +71,22 @@ MANUAL_FIELDS = {
 }
 RENDER_FIELDS = {"colourMode", "colourRendering", "colourInk", *MANUAL_FIELDS.values()}
 
-# Built-in plugin classification sets (overridable via image_settings["plugin_modes"] in device.json)
+# Pure photographic plugins (no UI typography overlays)
 PHOTO_PLUGINS = {
     "image_folder", "image_upload", "image_album", "image_url", "google_photos",
-    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic", "countdown",
-    "screenshot", "newspaper", "clock", "daily_quote", "weather", "calendar",
+    "immich", "icloud", "unsplash", "apod", "wpotd", "ai_image", "comic",
 }
 
-GRAPHICS_PLUGINS = {
-    "market_snapshot", "todo_list", "text",
-    "college_football_rankings", "nd_football_schedule",
+# Dashboard/widget plugins that composite typography, halos, or badges over image backgrounds
+HYBRID_PLUGINS = {
+    "calendar", "weather", "daily_quote", "countdown", "clock", "newspaper", "screenshot",
+    "market_snapshot", "nd_football_schedule", "college_football_rankings",
     "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
+}
+
+# Pure flat-colour UI plugins
+GRAPHICS_PLUGINS = {
+    "todo_list", "text",
 }
 
 # Inky Spectra 6 (E673 / EL133UF1) palettes, used as fallback or in development simulation
@@ -87,8 +96,6 @@ SPECTRA6 = {
 }
 
 # Paper-white normalized perceived Spectra 6 ink targets (Black, White, Yellow, Red, Blue, Green).
-# Prevents yellow highlight clipping and salmon/lavender drift caused by dividing Pimoroni's
-# raw SATURATED_PALETTE by 161.
 CALIBRATED_PERCEIVED = np.array([
     [15, 18, 20],     # Black: preserves shadow depth without grey haze
     [255, 255, 255],  # White: paper reference
@@ -105,7 +112,7 @@ _BAYER8 = (np.array([
     [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21]], dtype=np.float32) + 0.5) / 64.0 - 0.5
 
 
-def default_mode(plugin_id, image=None, photo_mode=PHOTO, plugin_modes=None):
+def default_mode(plugin_id, image=None, photo_mode=PHOTO, plugin_modes=None, settings=None):
     """Recommended rendering for a plugin: config map -> built-in sets -> pixel auto-detection."""
     if plugin_id:
         if isinstance(plugin_modes, dict) and plugin_id in plugin_modes:
@@ -114,6 +121,10 @@ def default_mode(plugin_id, image=None, photo_mode=PHOTO, plugin_modes=None):
                 return configured
         if plugin_id in PHOTO_PLUGINS:
             return photo_mode
+        if plugin_id in HYBRID_PLUGINS:
+            if isinstance(settings, dict) and settings.get("backgroundOption") == "color":
+                return GRAPHICS
+            return HYBRID
         if plugin_id in GRAPHICS_PLUGINS:
             return GRAPHICS
     return detect_mode(image, photo_mode=photo_mode)
@@ -155,7 +166,13 @@ def resolve_mode(plugin_id=None, settings=None, image=None, photo_mode=PHOTO, pl
     """Rendering algorithm: instance setting -> plugin map -> built-in sets -> auto-detect."""
     settings = settings or {}
     mode = settings.get("colourMode")
-    fallback = default_mode(plugin_id, image=image, photo_mode=photo_mode, plugin_modes=plugin_modes)
+    fallback = default_mode(
+        plugin_id,
+        image=image,
+        photo_mode=photo_mode,
+        plugin_modes=plugin_modes,
+        settings=settings,
+    )
 
     if mode == MANUAL:
         rendering = _ALIASES.get(settings.get("colourRendering"), settings.get("colourRendering"))
@@ -252,7 +269,6 @@ def _smooth_flat_areas(image, strength=PHOTO_DENOISE_STRENGTH, edge_threshold=PH
     orig = np.asarray(image, dtype=np.int16)
     blur = np.asarray(blurred, dtype=np.int16)
     diff = np.abs(orig - blur).max(axis=-1, keepdims=True)
-    # Fixed-point weight in [0, 256] to avoid allocating full-frame float32 arrays
     max_w = int(round(strength * 256.0))
     denom = max(1, int(edge_threshold))
     weight = np.clip(((denom - (diff - 5)) * max_w) // denom, 0, max_w)
@@ -305,7 +321,6 @@ def _oklab_to_linear_srgb(L, a, b_ok):
 
 def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
     """Compile a 33x33x33 perceptual OKLab + sub-palette alignment 3D LUT for Pillow."""
-    # Pillow Color3DLUT expects R varying fastest, then G, then B (indexing="ij" with b, g, r)
     grid = np.linspace(0.0, 1.0, size, dtype=np.float32)
     b_in, g_in, r_in = np.meshgrid(grid, grid, grid, indexing="ij")
 
@@ -322,7 +337,6 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
         L = np.clip(L ** VIVID_GAMMA, 0.0, 1.0)
         base_sat = VIVID_SATURATION
     else:
-        # Perceptual shadow & lower-midtone lift tapered cleanly to 0 above PHOTO_LIFT_KNEE
         if PHOTO_SHADOW_LIFT > 0.0 or PHOTO_MID_LIFT > 0.0:
             t = np.clip(L / PHOTO_LIFT_KNEE, 0.0, 1.0)
             w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
@@ -336,7 +350,6 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
         base_sat = PHOTO_SATURATION
 
     # Skin-tone chroma protection: warm hues (~25-65 deg in OKLab) resist over-saturation
-    # so faces stay smooth instead of fracturing into red/yellow dither dots
     skin_hue_w = np.exp(-0.5 * ((hue_deg - 45.0) / 22.0) ** 2)
     skin_chroma_w = np.clip(1.0 - np.maximum(0.0, C - 0.14) / 0.08, 0.0, 1.0)
     skin_mask = skin_hue_w * skin_chroma_w
@@ -357,9 +370,8 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
     g = _linear_to_srgb(g_out)
     b = _linear_to_srgb(b_out)
 
-    if mode == PHOTO:
+    if mode in (PHOTO, HYBRID):
         # Sub-palette harmonic alignment so each color family dithers with 1-2 inks
-        # 1. Blue deepening + R/G alignment onto {Blue, White, Black}
         max_rg = np.maximum(r, g)
         blue_dom = np.clip((b - max_rg) / 0.25, 0.0, 1.0)
         if PHOTO_BLUE_DARKEN > 0.0:
@@ -374,7 +386,6 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
         r = r + blue_align * (rg_mid - r)
         g = g + blue_align * (rg_mid - g)
 
-        # 2. Green alignment onto {Green, Black, White, Yellow}
         max_rb = np.maximum(r, b)
         green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
         g_adj = g * (1.0 - PHOTO_GREEN_DARKEN * green_dom) if PHOTO_GREEN_DARKEN > 0.0 else g
@@ -386,7 +397,6 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
         g = g + green_dom * (g_adj - g)
         b = b + green_dom * (b_clean - b)
 
-        # 3. Warm / skin alignment onto {Red, Yellow, White, Black}
         warm_mask = np.clip((r - np.maximum(g, b)) / 0.12, 0.0, 1.0) * np.clip((g - b + 0.04) / 0.08, 0.0, 1.0)
         b_warm = np.minimum(b, g * 0.92)
         b = b + warm_mask * (b_warm - b)
@@ -409,16 +419,17 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
 
 def get_spectra6_3dlut(mode=PHOTO):
     """Return a cached Color3DLUT filter for the given rendering mode."""
-    lut = _LUT_CACHE.get(mode)
+    lut_key = PHOTO if mode == HYBRID else mode
+    lut = _LUT_CACHE.get(lut_key)
     if lut is None:
-        lut = _build_spectra6_3dlut(mode=mode, size=LUT_SIZE)
-        _LUT_CACHE[mode] = lut
-        logger.info(f"Compiled {LUT_SIZE}^3 OKLab Color3DLUT for Spectra 6 mode='{mode}'")
+        lut = _build_spectra6_3dlut(mode=lut_key, size=LUT_SIZE)
+        _LUT_CACHE[lut_key] = lut
+        logger.info(f"Compiled {LUT_SIZE}^3 OKLab Color3DLUT for Spectra 6 mode='{lut_key}'")
     return lut
 
 
 # ============================================================
-# Graphics Mode & Quantization Helpers
+# Graphics & Hybrid UI Locking Helpers
 # ============================================================
 
 def adapt_colours(image, palette, strength=0.4, boost=1.7, min_chroma=24):
@@ -517,6 +528,42 @@ def _sharpen_edges(indices, pixels, rgb, palette, neutral_inks, edge_range=64, t
     return out
 
 
+def _lock_hybrid_ui(indices, orig_pixels, palette):
+    """Protect crisp typography, zero-blur text halos, and pure-primary UI accents over dithered photos."""
+    pure = np.array(palette["pure"], dtype=np.int32)
+    neutral_inks = set(_neutral_inks(palette))
+    out = indices.copy()
+
+    # 1. Banded exact-ink lock for solid UI text cores, white halos, and primary accent fills
+    h, _w, _ = orig_pixels.shape
+    for y0 in range(0, h, 120):
+        band = orig_pixels[y0:y0 + 120].astype(np.int32)
+        diff = band[:, :, None, :] - pure[None, None, :, :]
+        dist_sq = (diff * diff).sum(axis=-1)
+        nearest = dist_sq.argmin(axis=-1)
+        min_dist = dist_sq.min(axis=-1)
+
+        # Tighter threshold for black/white (<=22) so dark photo shadows don't clip;
+        # slightly wider (<=28) for pure digital primaries (#0000FF, #FF0000, #00FF00, #FFFF00).
+        is_neutral_ink = np.isin(nearest, list(neutral_inks))
+        thresh_sq = np.where(is_neutral_ink, 22 * 22, 28 * 28)
+        lock_mask = min_dist <= thresh_sq
+        out_band = out[y0:y0 + 120]
+        out_band[lock_mask] = nearest[lock_mask].astype(np.uint8)
+
+    # 2. Snap anti-aliased neutral edges (text + zero-blur white halos) to solid black/white ink
+    return _sharpen_edges(
+        out,
+        orig_pixels,
+        orig_pixels.astype(np.float32),
+        palette,
+        list(neutral_inks),
+        edge_range=64,
+        text_threshold=168,
+        neutral_chroma=28,
+    )
+
+
 def render_indices(image, palette, mode, saturation=None):
     """Palette indices (one per pixel) as the display will show them."""
     if saturation is None:
@@ -536,6 +583,8 @@ def render_indices(image, palette, mode, saturation=None):
         return _sharpen_edges(indices, pixels, rgb, palette, neutral_inks)
 
     image = image.convert("RGB")
+    orig_pixels = np.asarray(image, dtype=np.uint8) if mode == HYBRID else None
+
     if mode == PHOTO:
         image = _smooth_flat_areas(image)
         if PHOTO_CONTRAST != 1.0:
@@ -556,7 +605,12 @@ def render_indices(image, palette, mode, saturation=None):
     pal_image.putpalette(flat_pal)
 
     quantized = image.quantize(len(quant), palette=pal_image, dither=Image.Dither.FLOYDSTEINBERG)
-    return np.asarray(quantized, dtype=np.uint8)
+    indices = np.asarray(quantized, dtype=np.uint8)
+
+    if mode == HYBRID and orig_pixels is not None:
+        indices = _lock_hybrid_ui(indices, orig_pixels, palette)
+
+    return indices
 
 
 def to_pure_palette_image(indices, palette):
