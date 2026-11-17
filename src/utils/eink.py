@@ -1,21 +1,18 @@
 """Colour rendering for limited-palette e-paper displays (e.g. Inky Spectra 6).
 
 Rendering modes:
-- "photo": Floyd-Steinberg dithering towards the driver's blended palette with
-  edge-preserving flat-area noise smoothing, gamut compression, calibrated saturation,
-  a highlight-anchored multiplicative shadow/midtone lift, and sub-palette hue alignment
-  so each region dithers with 1-2 harmonizing inks rather than multi-ink confetti dots.
-- "vivid": Floyd-Steinberg dithering towards the inks as they really look (measured
-  palette, relative to the paper white) for high-punch landscapes/illustrations.
-- "graphics": tuned for UI-like images (weather, calendar, charts, text) with colour
+- "photo": Cached 33x33x33 perceptual OKLab 3D LUT (skin-tone chroma protection,
+  perceptual shadow/midtone lift, soft-knee gamut compression, sub-palette hue
+  alignment, and paper-white highlight clip) paired with edge-preserving flat-area
+  noise smoothing and dual-palette Floyd-Steinberg dithering.
+- "vivid": High-punch OKLab 3D LUT + full perceived ink gamut dithering for
+  landscapes and illustrations.
+- "graphics": Tuned for UI-like images (weather, calendar, charts, text) with colour
   adaptation, tight palette snapping (preserving subtle card borders and pale tints),
   8x8 Bayer ordered dithering, and edge sharpening so black text renders solid black.
-- "manual": per-instance image adjustments (colourSaturation, colourContrast,
+- "manual": Per-instance image adjustments (colourSaturation, colourContrast,
   colourBrightness, colourSharpness) and per-instance ink blend (colourInk) over a
   chosen rendering algorithm (colourRendering).
-
-Each mode defines its own `inky_saturation` in MODE_INK_SATURATION so the global
-`image_settings["inky_saturation"]` in device.json never overrides mode tuning.
 """
 
 import colorsys
@@ -33,28 +30,33 @@ MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
 RENDERINGS = (PHOTO, VIVID, GRAPHICS)
 _ALIASES = {"classic": PHOTO}
 
-# Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full measured/perceived ink gamut).
+# Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
-    PHOTO: 0.45,     # Balances bright highlights with deeper, cleaner Blue/Green ink separation
+    PHOTO: 0.85,     # 3D LUT normalizes paper white & gamut, allowing accurate perceived-ink dithering
     GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
     VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
 }
 
-# Photo & Vivid rendering curves
-PHOTO_SHADOW_LIFT = 0.24                # Opens up dark shadows & indoor scenes without adding grey
-PHOTO_MID_LIFT = 0.04                   # Gentle boost for lower midtones
-PHOTO_LIFT_KNEE = 0.72                  # Tapers lift smoothly to 0 above luma 184 (~0.72*255) so highlights/faces stay intact
-PHOTO_BLUE_DARKEN = 0.22                # Deepens mid/deep blues while keeping sky highlights airy
-PHOTO_GREEN_DARKEN = 0.06               # Slightly deepens greens so foliage locks onto solid green ink
-VIVID_GAMMA = 0.87                      # Balanced lift (1 / 1.15) for measured-ink "vivid" mode
-PHOTO_SATURATION = 1.12                 # Calibrated saturation (1.25 over-amplified sensor grain into dither dots)
+# 3D LUT & perceptual OKLab curve parameters
+LUT_SIZE = 33                           # 33x33x33 grid (~430 KB cached, C-level trilinear interpolation)
+PHOTO_SHADOW_LIFT = 0.20                # Perceptual OKLab lightness lift for dark indoor shadows
+PHOTO_MID_LIFT = 0.03                   # Gentle lower-midtone separation
+PHOTO_LIFT_KNEE = 0.70                  # Tapers lift smoothly to 0 above OKLab L=0.70 so highlights stay intact
+PHOTO_BLUE_DARKEN = 0.18                # Deepens mid/deep blues while keeping sky highlights airy
+PHOTO_GREEN_DARKEN = 0.08               # Anchors foliage onto solid green ink
+VIVID_GAMMA = 0.88                      # Perceptual lightness lift for "vivid" mode
+PHOTO_SATURATION = 1.10                 # OKLab chroma boost (skin tones protected automatically)
+VIVID_SATURATION = 1.22                 # Higher OKLab chroma boost for landscapes/illustrations
 PHOTO_CONTRAST = 1.00                   # Neutral contrast
-PHOTO_DENOISE_STRENGTH = 0.75           # Edge-preserving flat-area smoothing (melts grain in skin/sky/walls, keeps edges sharp)
-PHOTO_DENOISE_EDGE = 18.0               # Local RGB diff threshold above which edges/eyelashes/text are left untouched
-GAMUT_COMPRESS_STRENGTH = 0.35          # Pulls extreme out-of-gamut chroma inward to curb stray dots
+PHOTO_DENOISE_STRENGTH = 0.65           # Edge-preserving flat-area smoothing (integer math, low RAM)
+PHOTO_DENOISE_EDGE = 18                 # Local RGB diff threshold above which edges/text stay untouched
+GAMUT_COMPRESS_STRENGTH = 0.45          # Soft-knee OKLab chroma roll-off for out-of-gamut colors
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
-HIGHLIGHT_CLIP = 248                    # Only clips true specular/paper whites (>248), keeping light details
+HIGHLIGHT_CLIP = 246                    # Snaps near-white paper backgrounds/clouds cleanly to #FFFFFF
+
+# Cache for compiled PIL.ImageFilter.Color3DLUT instances keyed by (mode, saturation_rounded)
+_LUT_CACHE = {}
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -231,114 +233,181 @@ def _white_index(palette):
 
 
 def _smooth_flat_areas(image, strength=PHOTO_DENOISE_STRENGTH, edge_threshold=PHOTO_DENOISE_EDGE):
-    """Edge-preserving noise reduction: smooths grain in flat skin/sky/walls while keeping edges sharp."""
+    """Low-RAM integer edge-preserving denoise: smooths grain in flat skin/sky/walls while keeping edges sharp."""
     if strength <= 0.0:
         return image
     blurred = image.filter(ImageFilter.BoxBlur(1))
-    orig_f = np.asarray(image, dtype=np.float32)
-    blur_f = np.asarray(blurred, dtype=np.float32)
-    diff = np.abs(orig_f - blur_f).max(axis=-1, keepdims=True)
-    weight = strength * np.clip(1.0 - (diff - 5.0) / edge_threshold, 0.0, 1.0)
-    out = np.clip(orig_f + weight * (blur_f - orig_f), 0.0, 255.0).astype(np.uint8)
-    return Image.fromarray(out, "RGB")
+    orig = np.asarray(image, dtype=np.int16)
+    blur = np.asarray(blurred, dtype=np.int16)
+    diff = np.abs(orig - blur).max(axis=-1, keepdims=True)
+    # Fixed-point weight in [0, 256] to avoid allocating full-frame float32 arrays
+    max_w = int(round(strength * 256.0))
+    denom = max(1, int(edge_threshold))
+    weight = np.clip(((denom - (diff - 5)) * max_w) // denom, 0, max_w)
+    out = orig + ((weight * (blur - orig)) >> 8)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
-def _tune_photo_tones_and_colours(
-    image,
-    shadow_lift=PHOTO_SHADOW_LIFT,
-    mid_lift=PHOTO_MID_LIFT,
-    knee=PHOTO_LIFT_KNEE,
-    blue_darken=PHOTO_BLUE_DARKEN,
-    green_darken=PHOTO_GREEN_DARKEN,
-):
-    """
-    1. Multiplicative highlight-anchored shadow/midtone lift: brightens dark shadows and
-       indoor midtones without adding grey or washing out highlights.
-    2. Blue & Green depth adjustment + sub-palette hue alignment so Floyd-Steinberg
-       dithers each region with 1-2 harmonizing inks instead of multi-ink confetti dots:
-       - Blue-dominant pixels equalize R & G so skies/water dither cleanly with {Blu, Wht, Blk}
-         (eliminating stray Green/Red dots inside blues).
-       - Green-dominant pixels align R & B onto {Grn, Blk, Wht, Yel} so foliage dithers cleanly
-         with Green + Black/Yellow/White (eliminating stray Blue/Red confetti in greens).
-       - Warm/skin pixels keep B <= 0.92*G so skin and warm wood avoid Blue/Green speckles.
-    """
-    arr = np.asarray(image, dtype=np.float32) / 255.0
-    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    luma = r * 0.299 + g * 0.587 + b * 0.114
+# ============================================================
+# Perceptual OKLab 3D LUT Builder (cached once per mode)
+# ============================================================
 
-    # 1. Multiplicative shadow/midtone lift tapered to 0 above knee
-    if shadow_lift > 0.0 or mid_lift > 0.0:
-        t = np.clip(luma / knee, 0.0, 1.0)
-        w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
-        boost = shadow_lift * (np.maximum(luma, 1e-4) ** 0.65) * w + mid_lift * np.sin(np.pi * t) * (1.0 - t)
-        scale = np.minimum((luma + boost) / np.maximum(luma, 1e-4), 2.1)
-        arr = np.clip(arr * scale[..., None], 0.0, 1.0)
-        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-
-    # 2. Blue deepening (gentle on bright sky, deeper on mid/dark blue) + R/G alignment
-    max_rg = np.maximum(r, g)
-    blue_dom = np.clip((b - max_rg) / 0.25, 0.0, 1.0)
-    if blue_darken > 0.0:
-        blue_luma = r * 0.299 + g * 0.587 + b * 0.114
-        blue_weight = blue_dom * np.clip(1.15 - 0.75 * blue_luma, 0.20, 1.0)
-        arr = arr * (1.0 - blue_darken * blue_weight)[..., None]
-        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    blue_align = np.clip((b - np.maximum(r, g)) / 0.12, 0.0, 1.0)
-    rg_mid = 0.5 * (r + g)
-    r = r + blue_align * (rg_mid - r)
-    g = g + blue_align * (rg_mid - g)
-
-    # 3. Green alignment onto {Grn, Blk, Wht, Yel}
-    max_rb = np.maximum(r, b)
-    green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
-    g_adj = g * (1.0 - green_darken * green_dom) if green_darken > 0.0 else g
-    pastel = np.clip((g_adj - 0.68) / 0.32, 0.0, 1.0)
-    b_clean = g_adj * (0.18 + 0.55 * pastel)
-    warm_offset = np.clip(r - b, 0.0, 0.25 * g_adj)
-    r_clean = np.minimum(b_clean + warm_offset, 0.85 * g_adj)
-    r = r + green_dom * (r_clean - r)
-    g = g + green_dom * (g_adj - g)
-    b = b + green_dom * (b_clean - b)
-
-    # 4. Warm / Skin alignment onto {Red, Yel, Wht, Blk}
-    warm_mask = np.clip((r - np.maximum(g, b)) / 0.12, 0.0, 1.0) * np.clip((g - b + 0.04) / 0.08, 0.0, 1.0)
-    b_warm = np.minimum(b, g * 0.92)
-    b = b + warm_mask * (b_warm - b)
-
-    out = np.stack([r, g, b], axis=-1)
-    return Image.fromarray(np.clip(out * 255.0, 0.0, 255.0).astype(np.uint8), "RGB")
+def _srgb_to_linear(c):
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def _apply_photo_tonecurve(image, gamma=1.0, white_point=WHITE_POINT_MULTS, highlight_clip=HIGHLIGHT_CLIP):
-    """Optional gamma lift, neutral-white balance, and near-white highlight clipping without blowing out light tones."""
-    lut = []
-    for channel_mult in white_point:
-        for i in range(256):
-            val = 255.0 * ((i / 255.0) ** gamma) if i > 0 else 0.0
-            val *= channel_mult
-            lut.append(max(0, min(255, int(round(val)))))
-    image = image.point(lut)
-    if highlight_clip is not None:
-        arr = np.asarray(image, dtype=np.uint8).copy()
-        near_white = np.min(arr, axis=-1) > highlight_clip
-        arr[near_white] = 255
-        image = Image.fromarray(arr, "RGB")
-    return image
+def _linear_to_srgb(c):
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, 12.92 * c, 1.055 * (c ** (1.0 / 2.4)) - 0.055)
 
 
-def _compress_gamut(image, strength=GAMUT_COMPRESS_STRENGTH):
-    """Softly pull extreme out-of-gamut chroma inward so Floyd-Steinberg avoids stray opposing dots."""
-    if strength <= 0.0:
-        return image
-    arr = np.asarray(image, dtype=np.float32)
-    luma = (arr[..., 0] * 0.299 + arr[..., 1] * 0.587 + arr[..., 2] * 0.114)[..., None]
-    diff = arr - luma
-    max_chroma = np.max(np.abs(diff), axis=-1, keepdims=True)
-    excess = np.maximum(0.0, max_chroma - 110.0) / 145.0
-    scale = 1.0 - strength * excess
-    compressed = np.clip(luma + diff * scale, 0, 255).astype(np.uint8)
-    return Image.fromarray(compressed, "RGB")
+def _linear_srgb_to_oklab(r, g, b):
+    l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
 
+    l_ = np.cbrt(np.maximum(l, 0.0))
+    m_ = np.cbrt(np.maximum(m, 0.0))
+    s_ = np.cbrt(np.maximum(s, 0.0))
+
+    L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    b_ok = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    return L, a, b_ok
+
+
+def _oklab_to_linear_srgb(L, a, b_ok):
+    l_ = L + 0.3963377774 * a + 0.2158037573 * b_ok
+    m_ = L - 0.1055613458 * a - 0.0638541728 * b_ok
+    s_ = L - 0.0894841775 * a - 1.2914855480 * b_ok
+
+    l = l_ ** 3
+    m = m_ ** 3
+    s = s_ ** 3
+
+    r = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+    g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+    b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+    return r, g, b
+
+
+def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
+    """Compile a 33x33x33 perceptual OKLab + sub-palette alignment 3D LUT for Pillow."""
+    # Pillow Color3DLUT expects R varying fastest, then G, then B (indexing="ij" with b, g, r)
+    grid = np.linspace(0.0, 1.0, size, dtype=np.float32)
+    b_in, g_in, r_in = np.meshgrid(grid, grid, grid, indexing="ij")
+
+    r_lin = _srgb_to_linear(r_in)
+    g_lin = _srgb_to_linear(g_in)
+    b_lin = _srgb_to_linear(b_in)
+
+    L, a, b_ok = _linear_srgb_to_oklab(r_lin, g_lin, b_lin)
+    C = np.hypot(a, b_ok)
+    hue = np.arctan2(b_ok, a)
+    hue_deg = np.degrees(hue) % 360.0
+
+    if mode == VIVID:
+        L = np.clip(L ** VIVID_GAMMA, 0.0, 1.0)
+        base_sat = VIVID_SATURATION
+    else:
+        # Perceptual shadow & lower-midtone lift tapered cleanly to 0 above PHOTO_LIFT_KNEE
+        if PHOTO_SHADOW_LIFT > 0.0 or PHOTO_MID_LIFT > 0.0:
+            t = np.clip(L / PHOTO_LIFT_KNEE, 0.0, 1.0)
+            w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
+            L = np.clip(
+                L
+                + PHOTO_SHADOW_LIFT * (np.maximum(L, 1e-4) ** 0.75) * w
+                + PHOTO_MID_LIFT * np.sin(np.pi * t) * (1.0 - t),
+                0.0,
+                1.0,
+            )
+        base_sat = PHOTO_SATURATION
+
+    # Skin-tone chroma protection: warm hues (~25-65 deg in OKLab) resist over-saturation
+    # so faces stay smooth instead of fracturing into red/yellow dither dots
+    skin_hue_w = np.exp(-0.5 * ((hue_deg - 45.0) / 22.0) ** 2)
+    skin_chroma_w = np.clip(1.0 - np.maximum(0.0, C - 0.14) / 0.08, 0.0, 1.0)
+    skin_mask = skin_hue_w * skin_chroma_w
+    sat_scale = 1.0 + (base_sat - 1.0) * (1.0 - 0.65 * skin_mask)
+    C = C * sat_scale
+
+    # Soft-knee OKLab chroma compression to pull extreme out-of-gamut colors onto Spectra 6 inks
+    if GAMUT_COMPRESS_STRENGTH > 0.0:
+        knee_c = 0.16
+        excess = np.maximum(0.0, C - knee_c)
+        C = np.where(C > knee_c, knee_c + excess / (1.0 + GAMUT_COMPRESS_STRENGTH * (excess / 0.16)), C)
+
+    a = C * np.cos(hue)
+    b_ok = C * np.sin(hue)
+
+    r_out, g_out, b_out = _oklab_to_linear_srgb(L, a, b_ok)
+    r = _linear_to_srgb(r_out)
+    g = _linear_to_srgb(g_out)
+    b = _linear_to_srgb(b_out)
+
+    if mode == PHOTO:
+        # Sub-palette harmonic alignment so each color family dithers with 1-2 inks
+        # 1. Blue deepening + R/G alignment onto {Blue, White, Black}
+        max_rg = np.maximum(r, g)
+        blue_dom = np.clip((b - max_rg) / 0.25, 0.0, 1.0)
+        if PHOTO_BLUE_DARKEN > 0.0:
+            blue_luma = r * 0.299 + g * 0.587 + b * 0.114
+            blue_weight = blue_dom * np.clip(1.15 - 0.75 * blue_luma, 0.20, 1.0)
+            darken = 1.0 - PHOTO_BLUE_DARKEN * blue_weight
+            r *= darken
+            g *= darken
+            b *= darken
+        blue_align = np.clip((b - np.maximum(r, g)) / 0.12, 0.0, 1.0)
+        rg_mid = 0.5 * (r + g)
+        r = r + blue_align * (rg_mid - r)
+        g = g + blue_align * (rg_mid - g)
+
+        # 2. Green alignment onto {Green, Black, White, Yellow}
+        max_rb = np.maximum(r, b)
+        green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
+        g_adj = g * (1.0 - PHOTO_GREEN_DARKEN * green_dom) if PHOTO_GREEN_DARKEN > 0.0 else g
+        pastel = np.clip((g_adj - 0.68) / 0.32, 0.0, 1.0)
+        b_clean = g_adj * (0.18 + 0.55 * pastel)
+        warm_offset = np.clip(r - b, 0.0, 0.25 * g_adj)
+        r_clean = np.minimum(b_clean + warm_offset, 0.85 * g_adj)
+        r = r + green_dom * (r_clean - r)
+        g = g + green_dom * (g_adj - g)
+        b = b + green_dom * (b_clean - b)
+
+        # 3. Warm / skin alignment onto {Red, Yellow, White, Black}
+        warm_mask = np.clip((r - np.maximum(g, b)) / 0.12, 0.0, 1.0) * np.clip((g - b + 0.04) / 0.08, 0.0, 1.0)
+        b_warm = np.minimum(b, g * 0.92)
+        b = b + warm_mask * (b_warm - b)
+
+    # White-point balance & paper-white highlight clip
+    r = np.clip(r * WHITE_POINT_MULTS[0], 0.0, 1.0)
+    g = np.clip(g * WHITE_POINT_MULTS[1], 0.0, 1.0)
+    b = np.clip(b * WHITE_POINT_MULTS[2], 0.0, 1.0)
+
+    if HIGHLIGHT_CLIP is not None:
+        clip_thresh = HIGHLIGHT_CLIP / 255.0
+        near_white = np.minimum(np.minimum(r, g), b) > clip_thresh
+        r = np.where(near_white, 1.0, r)
+        g = np.where(near_white, 1.0, g)
+        b = np.where(near_white, 1.0, b)
+
+    table = np.stack([r, g, b], axis=-1).reshape(-1, 3)
+    return ImageFilter.Color3DLUT(size, table.ravel().tolist(), channels=3)
+
+
+def get_spectra6_3dlut(mode=PHOTO):
+    """Return a cached Color3DLUT filter for the given rendering mode."""
+    lut = _LUT_CACHE.get(mode)
+    if lut is None:
+        lut = _build_spectra6_3dlut(mode=mode, size=LUT_SIZE)
+        _LUT_CACHE[mode] = lut
+        logger.info(f"Compiled {LUT_SIZE}^3 OKLab Color3DLUT for Spectra 6 mode='{mode}'")
+    return lut
+
+
+# ============================================================
+# Graphics Mode & Quantization Helpers
+# ============================================================
 
 def adapt_colours(image, palette, strength=0.4, boost=1.7, min_chroma=24):
     """Saturate coloured pixels and darken them according to physical ink darkness."""
@@ -383,7 +452,7 @@ def _distances(rgb, quant_palette):
 
 
 def _snap(rgb, quant_palette, threshold=26):
-    """Pixels within `threshold` of a quantization colour become exactly that colour (tight enough to keep subtle light borders/tints)."""
+    """Pixels within `threshold` of a quantization colour become exactly that colour."""
     dist = _distances(rgb, quant_palette)
     nearest = dist.argmin(-1)
     close = dist.min(-1) <= threshold ** 2
@@ -440,8 +509,9 @@ def render_indices(image, palette, mode, saturation=None):
     """Palette indices (one per pixel) as the display will show them."""
     if saturation is None:
         saturation = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
-    quant = blended(palette, saturation)
+
     if mode == GRAPHICS:
+        quant = blended(palette, saturation)
         pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
         packed = (pixels[..., 0].astype(np.uint32) << 16) | (pixels[..., 1].astype(np.uint32) << 8) | pixels[..., 2]
         colours, inverse = np.unique(packed.ravel(), return_inverse=True)
@@ -454,20 +524,18 @@ def render_indices(image, palette, mode, saturation=None):
         return _sharpen_edges(indices, pixels, rgb, palette, neutral_inks)
 
     image = image.convert("RGB")
-    if mode == VIVID:
-        pure = np.array(palette["pure"], dtype=np.float32)
-        perceived = perceived_palette(palette)
-        quant = perceived * saturation + pure * (1.0 - saturation)
-        image = _apply_photo_tonecurve(image, gamma=VIVID_GAMMA)
-    else:  # PHOTO
+    if mode == PHOTO:
         image = _smooth_flat_areas(image)
         if PHOTO_CONTRAST != 1.0:
             image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
-        if PHOTO_SATURATION != 1.0:
-            image = ImageEnhance.Color(image).enhance(PHOTO_SATURATION)
-        image = _tune_photo_tones_and_colours(image)
-        image = _apply_photo_tonecurve(image, gamma=1.0, highlight_clip=HIGHLIGHT_CLIP)
-        image = _compress_gamut(image, strength=GAMUT_COMPRESS_STRENGTH)
+
+    # Single-pass C-level OKLab 3D LUT transform
+    image = image.filter(get_spectra6_3dlut(mode=mode))
+
+    # Dual-palette quantization: dither against perceived paper-normalized pigments
+    pure = np.array(palette["pure"], dtype=np.float32)
+    perceived = perceived_palette(palette)
+    quant = perceived * saturation + pure * (1.0 - saturation)
 
     pal_image = Image.new("P", (1, 1))
     pal_image.putpalette([int(v) for v in np.asarray(quant).flatten()])
