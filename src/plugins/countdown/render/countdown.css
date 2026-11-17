@@ -1,27 +1,56 @@
-.countdown-container {
-  display: flex;
-  align-items: center; 
-  justify-content: center;
-  font-family: "Jost";
-  height: 100%;
-  width: 100%;
+:root {
+  /* Baseline 800x480: uniform 2px octagonal zero-blur halo */
+  --text-halo:
+    -2px    0px   0 #FFFFFF,
+     2px    0px   0 #FFFFFF,
+     0px   -2px   0 #FFFFFF,
+     0px    2px   0 #FFFFFF,
+    -1.5px -1.5px 0 #FFFFFF,
+     1.5px -1.5px 0 #FFFFFF,
+    -1.5px  1.5px 0 #FFFFFF,
+     1.5px  1.5px 0 #FFFFFF;
+}
 
-  /* Crisp edges for e-ink rendering */
-  text-rendering: auto; 
-  -webkit-font-smoothing: none !important; 
-  font-smoothing: none !important;
-  font-variant-ligatures: none;
-  
-  /* ✅ E-ink Halo Effect: Forces a solid white outline around all text */
-  text-shadow: 
-      -4px -4px 0 #FFFFFF,  
-       4px -4px 0 #FFFFFF,
-      -4px  4px 0 #FFFFFF,
-       4px  4px 0 #FFFFFF,
-       0px  4px 0 #FFFFFF,
+/* Large 1600x1200 (LargeInky): uniform 4px octagonal zero-blur halo */
+@media (min-width: 1400px) and (min-height: 1000px) {
+  :root {
+    --text-halo:
+      -4px  0px 0 #FFFFFF,
        4px  0px 0 #FFFFFF,
        0px -4px 0 #FFFFFF,
-      -4px  0px 0 #FFFFFF;
+       0px  4px 0 #FFFFFF,
+      -3px -3px 0 #FFFFFF,
+       3px -3px 0 #FFFFFF,
+      -3px  3px 0 #FFFFFF,
+       3px  3px 0 #FFFFFF;
+  }
+}
+
+.countdown-container,
+.countdown-container * {
+  font-family: "Jost", sans-serif;
+  color: #000000;
+  box-sizing: border-box;
+
+  /* Crisp edges & consistent digit spacing for e-ink rendering */
+  text-rendering: auto;
+  -webkit-font-smoothing: none !important;
+  font-smoothing: none !important;
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+
+  /* Solid white zero-blur halo around all countdown text */
+  text-shadow: var(--text-halo);
+}
+
+.countdown-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 
 .countdown-wrapper {
@@ -29,28 +58,31 @@
   text-align: center;
   margin: 0;
   padding: 0;
+  overflow: visible;
 }
 
 .title {
   font-size: min(11dvw, 11dvh);
-  font-weight: bold;
-  letter-spacing: .3px;
-  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  line-height: 1.05;
 }
 
 .subtitle {
   margin: 0 0 4dvh;
   font-size: min(5dvw, 5dvh);
-  font-weight: bold;
+  font-weight: 700;
 }
 
 .day_count {
   line-height: 1;
   font-size: min(32dvh, 32dvw);
+  font-weight: 800;
 }
 
 .label {
-  letter-spacing: .1em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   font-size: min(8dvh, 8dvw);
+  font-weight: 700;
 }
