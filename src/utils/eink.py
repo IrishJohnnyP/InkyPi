@@ -20,12 +20,14 @@ Rendering modes:
 """
 
 import colorsys
+import glob
 import hashlib
 import inspect
 import logging
 import os
 import re
 import tempfile
+import time
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -66,9 +68,10 @@ GAMUT_COMPRESS_STRENGTH = 0.40          # Soft-knee OKLab chroma roll-off for ou
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
 HIGHLIGHT_CLIP = 246                    # Snaps near-white paper backgrounds/clouds cleanly to #FFFFFF
 
-# In-memory cache for compiled PIL.ImageFilter.Color3DLUT instances (bounded for low-RAM devices)
+# Bounded RAM & /tmp disk caches for compiled 3D LUTs (protects tmpfs headroom on low-RAM Pis)
 _LUT_CACHE = {}
 _MAX_LUT_CACHE = 6
+_MAX_DISK_LUT_CACHE = 8
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -89,7 +92,7 @@ PHOTO_PLUGINS = {
 HYBRID_PLUGINS = {
     "calendar", "weather", "daily_quote", "countdown", "clock", "newspaper", "screenshot",
     "market_snapshot", "nd_football_schedule", "college_football_rankings",
-    "scoreboard", "nfl", "mlb", "nba", "nhl", "cfb", "cbb",
+    "scoreboard", "nfl", "mlb", "nhl", "nba", "cfb", "cbb",
 }
 
 # Pure flat-colour UI plugins
@@ -377,7 +380,7 @@ def _sharpen_photo_details(
 
 
 # ============================================================
-# Perceptual OKLab 3D LUT Builder (memory + disk cached)
+# Perceptual OKLab 3D LUT Builder (memory + disk LRU cached)
 # ============================================================
 
 def _srgb_to_linear(c):
@@ -537,6 +540,45 @@ def _lut_cache_path(mode, size, params):
     return os.path.join(tempfile.gettempdir(), f"inkypi_spectra6_lut_{mode}_{digest}.npy")
 
 
+def _prune_lut_disk_cache(keep_paths=None, max_files=_MAX_DISK_LUT_CACHE):
+    """Prune stale /tmp/inkypi_spectra6_lut_*.npy files (LRU) and orphaned temp files."""
+    tmp_dir = tempfile.gettempdir()
+    protected = set(_LUT_CACHE.keys())
+    if keep_paths:
+        protected.update(keep_paths)
+
+    now = time.time()
+    entries = []
+
+    for path in glob.glob(os.path.join(tmp_dir, "inkypi_spectra6_lut_*.npy")):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+
+        # Clean up orphaned atomic-write temp files older than 60 seconds
+        if ".tmp." in os.path.basename(path):
+            if (now - st.st_mtime) > 60.0:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            continue
+
+        entries.append((st.st_mtime, path))
+
+    # Sort newest/most-recently-used first and remove anything beyond max_files
+    entries.sort(key=lambda item: item[0], reverse=True)
+    for _, path in entries[max_files:]:
+        if path in protected:
+            continue
+        try:
+            os.remove(path)
+            logger.debug(f"Pruned stale 3D LUT cache file: {path}")
+        except OSError:
+            pass
+
+
 def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE, params=None, cache_path=None):
     """Load or compile a 33x33x33 perceptual OKLab 3D LUT for Pillow."""
     p = params or _resolve_lut_params()
@@ -549,6 +591,10 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE, params=None, cache_path=Non
             loaded = np.load(cache_path)
             if loaded.shape == expected_shape and loaded.dtype == np.float32:
                 table = loaded
+                try:
+                    os.utime(cache_path, None)
+                except OSError:
+                    pass
                 logger.info(f"Loaded cached {size}^3 OKLab Color3DLUT from {cache_path}")
         except Exception as e:
             logger.debug(f"Could not read cached 3D LUT {cache_path}: {e}")
@@ -562,6 +608,7 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE, params=None, cache_path=Non
             logger.info(f"Compiled and cached {size}^3 OKLab Color3DLUT to {cache_path}")
         except Exception as e:
             logger.debug(f"Could not persist 3D LUT cache to {cache_path}: {e}")
+        _prune_lut_disk_cache(keep_paths={cache_path})
 
     return ImageFilter.Color3DLUT(size, table.ravel().tolist(), channels=3)
 
@@ -647,160 +694,4 @@ def _ordered_indices(rgb, quant_palette, neutral_inks=(), spread=96.0, neutral_c
     threshold = np.tile(_BAYER8, (h // 8 + 1, w // 8 + 1))[:h, :w][..., None] * spread
     shifted = rgb + threshold
     neutral = (rgb.max(-1) - rgb.min(-1)) < neutral_chroma
-    chromatic = np.ones(len(quant_palette), dtype=bool)
-    chromatic[list(neutral_inks)] = False
-    shifted = shifted.astype(np.float32)
-    indices = np.empty((h, w), dtype=np.uint8)
-    for y0 in range(0, h, 120):
-        band = shifted[y0:y0 + 120]
-        dist = _distances(band, quant_palette)
-        if len(neutral_inks) >= 2:
-            dist[neutral[y0:y0 + 120][..., None] & chromatic[None, None, :]] = np.inf
-        indices[y0:y0 + 120] = dist.argmin(-1)
-    return indices
-
-
-def _sharpen_edges(indices, pixels, rgb, palette, neutral_inks, edge_range=64, text_threshold=170,
-                   neutral_chroma=24):
-    """Snap grey anti-aliasing pixels on sharp edges to pure black or white ink."""
-    if len(neutral_inks) < 2:
-        return indices
-    measured = np.array(palette["measured"], dtype=np.float32)
-    luma_of = lambda c: c @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
-    black = min(neutral_inks, key=lambda i: luma_of(measured[i]))
-    white = max(neutral_inks, key=lambda i: luma_of(measured[i]))
-    grey = Image.fromarray(pixels).convert("L")
-    local_range = (np.asarray(grey.filter(ImageFilter.MaxFilter(3)), dtype=np.int16)
-                   - np.asarray(grey.filter(ImageFilter.MinFilter(3)), dtype=np.int16))
-    neutral = (rgb.max(-1) - rgb.min(-1)) < neutral_chroma
-    edge = neutral & (local_range > edge_range)
-    luma = np.asarray(grey, dtype=np.int16)
-    out = indices.copy()
-    out[edge] = np.where(luma[edge] < text_threshold, black, white)
-    return out
-
-
-def _lock_hybrid_ui(indices, orig_pixels, palette):
-    """Protect crisp typography, zero-blur text halos, and pure-primary UI accents over dithered photos."""
-    pure = np.array(palette["pure"], dtype=np.int32)
-    neutral_inks = set(_neutral_inks(palette))
-    out = indices.copy()
-
-    # 1. Banded exact-ink lock for solid UI text cores, white halos, and primary accent fills
-    h, _w, _ = orig_pixels.shape
-    for y0 in range(0, h, 120):
-        band = orig_pixels[y0:y0 + 120].astype(np.int32)
-        diff = band[:, :, None, :] - pure[None, None, :, :]
-        dist_sq = (diff * diff).sum(axis=-1)
-        nearest = dist_sq.argmin(axis=-1)
-        min_dist = dist_sq.min(axis=-1)
-
-        is_neutral_ink = np.isin(nearest, list(neutral_inks))
-        thresh_sq = np.where(is_neutral_ink, 22 * 22, 28 * 28)
-        lock_mask = min_dist <= thresh_sq
-        out_band = out[y0:y0 + 120]
-        out_band[lock_mask] = nearest[lock_mask].astype(np.uint8)
-
-    # 2. Snap anti-aliased neutral edges (text + zero-blur white halos) to solid black/white ink
-    return _sharpen_edges(
-        out,
-        orig_pixels,
-        orig_pixels.astype(np.float32),
-        palette,
-        list(neutral_inks),
-        edge_range=64,
-        text_threshold=168,
-        neutral_chroma=28,
-    )
-
-
-def render_indices(image, palette, mode, saturation=None, plan=None, resolution=None):
-    """Palette indices (one per pixel) as the display will show them."""
-    if saturation is None:
-        saturation = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
-
-    res = (
-        resolution
-        or (plan.get("resolution") if isinstance(plan, dict) else None)
-        or image.size
-    )
-
-    if mode == GRAPHICS:
-        quant = blended(palette, saturation)
-        pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
-        packed = (pixels[..., 0].astype(np.uint32) << 16) | (pixels[..., 1].astype(np.uint32) << 8) | pixels[..., 2]
-        colours, inverse = np.unique(packed.ravel(), return_inverse=True)
-        unique_rgb = np.stack([(colours >> 16) & 255, (colours >> 8) & 255, colours & 255], -1).astype(np.uint8)
-        adapted = adapt_colours(Image.fromarray(unique_rgb[None, :, :], "RGB"), palette)
-        snapped = _snap(np.asarray(adapted, dtype=np.float32), quant)[0]
-        rgb = snapped[inverse.ravel()].reshape(pixels.shape)
-        neutral_inks = _neutral_inks(palette)
-        indices = _ordered_indices(rgb, quant, neutral_inks)
-        return _sharpen_edges(indices, pixels, rgb, palette, neutral_inks)
-
-    params = (
-        plan.get("lut_params")
-        if isinstance(plan, dict) and "lut_params" in plan
-        else _resolve_lut_params(resolution=res)
-    )
-
-    image = image.convert("RGB")
-    orig_pixels = np.asarray(image, dtype=np.uint8) if mode == HYBRID else None
-
-    if mode == PHOTO:
-        image = _smooth_flat_areas(image, strength=params["denoise_strength"])
-        if PHOTO_CONTRAST != 1.0:
-            image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
-
-    if mode in (PHOTO, VIVID):
-        image = _sharpen_photo_details(
-            image,
-            radius=params["sharpen_radius"],
-            percent=params["sharpen_percent"],
-            threshold=params["sharpen_threshold"],
-        )
-
-    # Single-pass C-level OKLab 3D LUT transform
-    image = image.filter(get_spectra6_3dlut(mode=mode, params=params))
-
-    # Dual-palette quantization: dither against panel-calibrated paper-normalized pigments
-    pure = np.array(palette["pure"], dtype=np.float32)
-    perceived = perceived_palette(palette, resolution=res)
-    quant = perceived * saturation + pure * (1.0 - saturation)
-
-    # Pad quantization palette to 256 entries so Pillow's C color-cache never reads uninitialized slots
-    flat_pal = [int(round(v)) for v in np.asarray(quant).flatten()]
-    flat_pal += flat_pal[:3] * (256 - len(quant))
-    pal_image = Image.new("P", (1, 1))
-    pal_image.putpalette(flat_pal)
-
-    quantized = image.quantize(len(quant), palette=pal_image, dither=Image.Dither.FLOYDSTEINBERG)
-    indices = np.asarray(quantized, dtype=np.uint8)
-
-    if mode == HYBRID and orig_pixels is not None:
-        indices = _lock_hybrid_ui(indices, orig_pixels, palette)
-
-    return indices
-
-
-def to_pure_palette_image(indices, palette):
-    """Palette ("P") image in the display's pure colours: the driver sends it without dithering."""
-    image = Image.fromarray(indices.astype(np.uint8), "P")
-    image.putpalette([int(v) for colour in palette["pure"] for v in colour])
-    return image
-
-
-def perceived_palette(palette, resolution=None):
-    """The inks as the eye sees them: panel-calibrated paper-normalized Spectra 6 targets."""
-    if len(palette.get("measured", [])) == len(CALIBRATED_PERCEIVED):
-        return _panel_profile(resolution)["perceived"].copy()
-    measured = np.array(palette["measured"], dtype=np.float32)
-    white = measured[_white_index(palette)]
-    return np.clip(measured / np.maximum(white, 1) * 255.0, 0, 255)
-
-
-def simulate(image, palette, mode, saturation=None, resolution=None):
-    """What the panel will look like (calibrated ink colours, normalised to the paper white)."""
-    res = resolution or image.size
-    indices = render_indices(image, palette, mode, saturation=saturation, resolution=res)
-    return Image.fromarray(perceived_palette(palette, resolution=res).astype(np.uint8)[indices], "RGB")
+    chromatic = np
