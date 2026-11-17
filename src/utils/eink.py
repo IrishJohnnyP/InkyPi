@@ -4,12 +4,13 @@ Rendering modes:
 - "photo": Cached 33x33x33 perceptual OKLab 3D LUT (skin-tone chroma protection,
   perceptual shadow/midtone lift, soft-knee gamut compression, sub-palette hue
   alignment, and paper-white highlight clip) paired with edge-preserving flat-area
-  noise smoothing and calibrated dual-palette Floyd-Steinberg dithering.
+  noise smoothing, thresholded UnsharpMask detail recovery, and calibrated
+  dual-palette Floyd-Steinberg dithering.
 - "hybrid": OKLab 3D LUT + calibrated Floyd-Steinberg dithering for photographic
   backgrounds combined with post-quantization UI ink locking so typography, zero-blur
   text halos, borders, and primary accent fills render solid without dither bleed.
-- "vivid": High-punch OKLab 3D LUT + full perceived ink gamut dithering for
-  landscapes and illustrations.
+- "vivid": High-punch OKLab 3D LUT + thresholded detail sharpening + full perceived
+  ink gamut dithering for landscapes and illustrations.
 - "graphics": Tuned for flat-colour UI dashboards (todo lists, plain-colour cards)
   with colour adaptation, tight palette snapping, 8x8 Bayer ordered dithering, and
   edge sharpening.
@@ -19,9 +20,12 @@ Rendering modes:
 """
 
 import colorsys
+import hashlib
 import inspect
 import logging
+import os
 import re
+import tempfile
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -43,7 +47,7 @@ MODE_INK_SATURATION = {
 }
 
 # 3D LUT & perceptual OKLab curve parameters
-LUT_SIZE = 33                           # 33x33x33 grid (~430 KB cached, C-level trilinear interpolation)
+LUT_SIZE = 33                           # 33x33x33 grid (~431 KB cached, C-level trilinear interpolation)
 PHOTO_SHADOW_LIFT = 0.10                # Keeps dark shadows/indoor backgrounds rich without milky haze
 PHOTO_MID_LIFT = 0.03                   # Gentle lower-midtone separation
 PHOTO_LIFT_KNEE = 0.70                  # Tapers lift smoothly to 0 above OKLab L=0.70 so highlights stay intact
@@ -55,6 +59,9 @@ VIVID_SATURATION = 1.22                 # Higher OKLab chroma boost for landscap
 PHOTO_CONTRAST = 1.00                   # Neutral contrast
 PHOTO_DENOISE_STRENGTH = 0.65           # Edge-preserving flat-area smoothing (integer math, low RAM)
 PHOTO_DENOISE_EDGE = 18                 # Local RGB diff threshold above which edges/text stay untouched
+PHOTO_SHARPEN_RADIUS = 1.0              # Fine-detail radius for eyes, hair, and textures
+PHOTO_SHARPEN_PERCENT = 45              # Restores edge crispness softened by e-ink dithering
+PHOTO_SHARPEN_THRESHOLD = 4             # Ignores subtle residual grain in smoothed skin/sky areas
 GAMUT_COMPRESS_STRENGTH = 0.40          # Soft-knee OKLab chroma roll-off for out-of-gamut colors
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
 HIGHLIGHT_CLIP = 246                    # Snaps near-white paper backgrounds/clouds cleanly to #FFFFFF
@@ -276,8 +283,22 @@ def _smooth_flat_areas(image, strength=PHOTO_DENOISE_STRENGTH, edge_threshold=PH
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
+def _sharpen_photo_details(
+    image,
+    radius=PHOTO_SHARPEN_RADIUS,
+    percent=PHOTO_SHARPEN_PERCENT,
+    threshold=PHOTO_SHARPEN_THRESHOLD,
+):
+    """Edge-aware UnsharpMask: restores fine detail without re-amplifying flat-area grain."""
+    if percent <= 0 or radius <= 0.0:
+        return image
+    return image.filter(
+        ImageFilter.UnsharpMask(radius=radius, percent=int(percent), threshold=int(threshold))
+    )
+
+
 # ============================================================
-# Perceptual OKLab 3D LUT Builder (cached once per mode)
+# Perceptual OKLab 3D LUT Builder (memory + disk cached)
 # ============================================================
 
 def _srgb_to_linear(c):
@@ -319,8 +340,8 @@ def _oklab_to_linear_srgb(L, a, b_ok):
     return r, g, b
 
 
-def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
-    """Compile a 33x33x33 perceptual OKLab + sub-palette alignment 3D LUT for Pillow."""
+def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
+    """Compute the (size^3, 3) float32 OKLab + sub-palette alignment LUT table."""
     grid = np.linspace(0.0, 1.0, size, dtype=np.float32)
     b_in, g_in, r_in = np.meshgrid(grid, grid, grid, indexing="ij")
 
@@ -413,7 +434,46 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
         g = np.where(near_white, 1.0, g)
         b = np.where(near_white, 1.0, b)
 
-    table = np.stack([r, g, b], axis=-1).reshape(-1, 3)
+    return np.stack([r, g, b], axis=-1).reshape(-1, 3).astype(np.float32)
+
+
+def _lut_cache_path(mode, size):
+    """Parameter-hashed .npy path so any constant tweak automatically invalidates the disk cache."""
+    params = (
+        f"{mode}|{size}|{PHOTO_SHADOW_LIFT}|{PHOTO_MID_LIFT}|{PHOTO_LIFT_KNEE}|"
+        f"{PHOTO_BLUE_DARKEN}|{PHOTO_GREEN_DARKEN}|{VIVID_GAMMA}|"
+        f"{PHOTO_SATURATION}|{VIVID_SATURATION}|{GAMUT_COMPRESS_STRENGTH}|"
+        f"{WHITE_POINT_MULTS}|{HIGHLIGHT_CLIP}"
+    )
+    digest = hashlib.sha256(params.encode("utf-8")).hexdigest()[:12]
+    return os.path.join(tempfile.gettempdir(), f"inkypi_spectra6_lut_{mode}_{digest}.npy")
+
+
+def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
+    """Load or compile a 33x33x33 perceptual OKLab 3D LUT for Pillow."""
+    cache_path = _lut_cache_path(mode, size)
+    expected_shape = (size ** 3, 3)
+    table = None
+
+    if os.path.exists(cache_path):
+        try:
+            loaded = np.load(cache_path)
+            if loaded.shape == expected_shape and loaded.dtype == np.float32:
+                table = loaded
+                logger.info(f"Loaded cached {size}^3 OKLab Color3DLUT from {cache_path}")
+        except Exception as e:
+            logger.debug(f"Could not read cached 3D LUT {cache_path}: {e}")
+
+    if table is None:
+        table = _compute_spectra6_lut_table(mode=mode, size=size)
+        try:
+            tmp_path = f"{cache_path}.{os.getpid()}.tmp.npy"
+            np.save(tmp_path, table)
+            os.replace(tmp_path, cache_path)
+            logger.info(f"Compiled and cached {size}^3 OKLab Color3DLUT to {cache_path}")
+        except Exception as e:
+            logger.debug(f"Could not persist 3D LUT cache to {cache_path}: {e}")
+
     return ImageFilter.Color3DLUT(size, table.ravel().tolist(), channels=3)
 
 
@@ -424,7 +484,6 @@ def get_spectra6_3dlut(mode=PHOTO):
     if lut is None:
         lut = _build_spectra6_3dlut(mode=lut_key, size=LUT_SIZE)
         _LUT_CACHE[lut_key] = lut
-        logger.info(f"Compiled {LUT_SIZE}^3 OKLab Color3DLUT for Spectra 6 mode='{lut_key}'")
     return lut
 
 
@@ -543,8 +602,6 @@ def _lock_hybrid_ui(indices, orig_pixels, palette):
         nearest = dist_sq.argmin(axis=-1)
         min_dist = dist_sq.min(axis=-1)
 
-        # Tighter threshold for black/white (<=22) so dark photo shadows don't clip;
-        # slightly wider (<=28) for pure digital primaries (#0000FF, #FF0000, #00FF00, #FFFF00).
         is_neutral_ink = np.isin(nearest, list(neutral_inks))
         thresh_sq = np.where(is_neutral_ink, 22 * 22, 28 * 28)
         lock_mask = min_dist <= thresh_sq
@@ -589,6 +646,9 @@ def render_indices(image, palette, mode, saturation=None):
         image = _smooth_flat_areas(image)
         if PHOTO_CONTRAST != 1.0:
             image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
+
+    if mode in (PHOTO, VIVID):
+        image = _sharpen_photo_details(image)
 
     # Single-pass C-level OKLab 3D LUT transform
     image = image.filter(get_spectra6_3dlut(mode=mode))
