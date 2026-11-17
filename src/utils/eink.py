@@ -4,8 +4,8 @@ Rendering modes:
 - "photo": Cached 33x33x33 perceptual OKLab 3D LUT (skin-tone chroma protection,
   perceptual shadow/midtone lift, soft-knee gamut compression, sub-palette hue
   alignment, and paper-white highlight clip) paired with edge-preserving flat-area
-  noise smoothing, thresholded UnsharpMask detail recovery, and calibrated
-  dual-palette Floyd-Steinberg dithering.
+  noise smoothing, panel-calibrated UnsharpMask detail recovery, and dual-palette
+  Floyd-Steinberg dithering.
 - "hybrid": OKLab 3D LUT + calibrated Floyd-Steinberg dithering for photographic
   backgrounds combined with post-quantization UI ink locking so typography, zero-blur
   text halos, borders, and primary accent fills render solid without dither bleed.
@@ -46,7 +46,7 @@ MODE_INK_SATURATION = {
     VIVID: 1.00,     # Full calibrated perceived ink gamut
 }
 
-# 3D LUT & perceptual OKLab curve parameters
+# Default 3D LUT & perceptual OKLab curve parameters (overridable in device.json)
 LUT_SIZE = 33                           # 33x33x33 grid (~431 KB cached, C-level trilinear interpolation)
 PHOTO_SHADOW_LIFT = 0.10                # Keeps dark shadows/indoor backgrounds rich without milky haze
 PHOTO_MID_LIFT = 0.03                   # Gentle lower-midtone separation
@@ -59,15 +59,16 @@ VIVID_SATURATION = 1.22                 # Higher OKLab chroma boost for landscap
 PHOTO_CONTRAST = 1.00                   # Neutral contrast
 PHOTO_DENOISE_STRENGTH = 0.65           # Edge-preserving flat-area smoothing (integer math, low RAM)
 PHOTO_DENOISE_EDGE = 18                 # Local RGB diff threshold above which edges/text stay untouched
-PHOTO_SHARPEN_RADIUS = 1.0              # Fine-detail radius for eyes, hair, and textures
-PHOTO_SHARPEN_PERCENT = 45              # Restores edge crispness softened by e-ink dithering
+PHOTO_SHARPEN_RADIUS = 1.0              # Default fine-detail radius (13.3" panel)
+PHOTO_SHARPEN_PERCENT = 45              # Default edge crispness recovery (13.3" panel)
 PHOTO_SHARPEN_THRESHOLD = 4             # Ignores subtle residual grain in smoothed skin/sky areas
 GAMUT_COMPRESS_STRENGTH = 0.40          # Soft-knee OKLab chroma roll-off for out-of-gamut colors
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
 HIGHLIGHT_CLIP = 246                    # Snaps near-white paper backgrounds/clouds cleanly to #FFFFFF
 
-# Cache for compiled PIL.ImageFilter.Color3DLUT instances keyed by mode
+# In-memory cache for compiled PIL.ImageFilter.Color3DLUT instances (bounded for low-RAM devices)
 _LUT_CACHE = {}
+_MAX_LUT_CACHE = 6
 
 # Manual mode: per-instance values replacing the global image settings
 MANUAL_FIELDS = {
@@ -112,11 +113,45 @@ CALIBRATED_PERCEIVED = np.array([
     [36, 108, 54],    # Green: rich foliage green
 ], dtype=np.float32)
 
+# Panel-specific optical and sharpening profiles keyed by native panel resolution
+PANEL_PROFILES = {
+    (1600, 1200): {  # 13.3" Spectra 6 (EL133UF1)
+        "sharpen_radius": 1.0,
+        "sharpen_percent": 45,
+        "sharpen_threshold": 4,
+        "perceived": CALIBRATED_PERCEIVED,
+    },
+    (800, 480): {  # 7.3" Spectra 6 (E673)
+        "sharpen_radius": 0.8,
+        "sharpen_percent": 35,
+        "sharpen_threshold": 4,
+        "perceived": np.array([
+            [18, 20, 22],     # Black
+            [255, 255, 255],  # White
+            [236, 218, 65],   # Yellow
+            [172, 38, 38],    # Red
+            [45, 92, 175],    # Blue
+            [38, 105, 56],    # Green
+        ], dtype=np.float32),
+    },
+}
+
 _BAYER8 = (np.array([
     [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
     [12, 44, 4, 36, 14, 46, 6, 38], [60, 28, 52, 20, 62, 30, 54, 22],
     [3, 35, 11, 43, 1, 33, 9, 41], [51, 19, 59, 27, 49, 17, 57, 25],
     [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21]], dtype=np.float32) + 0.5) / 64.0 - 0.5
+
+
+def _panel_profile(resolution=None):
+    """Look up panel-specific calibration (matches both landscape and portrait orientations)."""
+    if resolution and len(resolution) >= 2:
+        w, h = int(resolution[0]), int(resolution[1])
+        if (w, h) in PANEL_PROFILES:
+            return PANEL_PROFILES[(w, h)]
+        if (h, w) in PANEL_PROFILES:
+            return PANEL_PROFILES[(h, w)]
+    return PANEL_PROFILES[(1600, 1200)]
 
 
 def default_mode(plugin_id, image=None, photo_mode=PHOTO, plugin_modes=None, settings=None):
@@ -195,6 +230,41 @@ def _number(value, default, low, high):
         return default
 
 
+def _resolve_lut_params(image_settings=None, settings=None, resolution=None):
+    """Resolve OKLab 3D LUT & sharpening parameters from panel defaults + device.json overrides."""
+    profile = _panel_profile(resolution)
+    merged = {}
+    if isinstance(image_settings, dict):
+        merged.update(image_settings)
+    if isinstance(settings, dict):
+        merged.update(settings)
+
+    raw_clip = merged.get("highlight_clip", HIGHLIGHT_CLIP)
+    if raw_clip in (False, "none", "None"):
+        highlight_clip = None
+    elif raw_clip is None:
+        highlight_clip = HIGHLIGHT_CLIP
+    else:
+        highlight_clip = int(round(_number(raw_clip, HIGHLIGHT_CLIP, 200, 255)))
+
+    return {
+        "shadow_lift": _number(merged.get("shadow_lift"), PHOTO_SHADOW_LIFT, 0.0, 0.50),
+        "mid_lift": _number(merged.get("mid_lift"), PHOTO_MID_LIFT, 0.0, 0.30),
+        "lift_knee": _number(merged.get("lift_knee"), PHOTO_LIFT_KNEE, 0.20, 1.00),
+        "blue_darken": _number(merged.get("blue_darken"), PHOTO_BLUE_DARKEN, 0.0, 0.50),
+        "green_darken": _number(merged.get("green_darken"), PHOTO_GREEN_DARKEN, 0.0, 0.50),
+        "vivid_gamma": _number(merged.get("vivid_gamma"), VIVID_GAMMA, 0.50, 1.50),
+        "photo_saturation": _number(merged.get("photo_saturation"), PHOTO_SATURATION, 0.50, 1.80),
+        "vivid_saturation": _number(merged.get("vivid_saturation"), VIVID_SATURATION, 0.50, 2.00),
+        "gamut_compress": _number(merged.get("gamut_compress"), GAMUT_COMPRESS_STRENGTH, 0.0, 1.50),
+        "highlight_clip": highlight_clip,
+        "denoise_strength": _number(merged.get("denoise_strength"), PHOTO_DENOISE_STRENGTH, 0.0, 1.0),
+        "sharpen_radius": _number(merged.get("sharpen_radius"), profile["sharpen_radius"], 0.0, 3.0),
+        "sharpen_percent": int(round(_number(merged.get("sharpen_percent"), profile["sharpen_percent"], 0, 150))),
+        "sharpen_threshold": int(round(_number(merged.get("sharpen_threshold"), profile["sharpen_threshold"], 0, 32))),
+    }
+
+
 def mode_saturation(mode, image_settings=None):
     """Ink saturation for a specific rendering mode, ignoring global inky_saturation."""
     default = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
@@ -205,8 +275,8 @@ def mode_saturation(mode, image_settings=None):
     return default
 
 
-def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
-    """How to render an instance: algorithm, image enhancement and mode-specific ink saturation."""
+def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None, resolution=None):
+    """How to render an instance: algorithm, image enhancement, LUT params, and ink saturation."""
     settings = settings or {}
     image_settings = dict(image_settings) if isinstance(image_settings, dict) else {}
     preferred_photo = image_settings.get("photo_mode", PHOTO)
@@ -222,6 +292,8 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
         plugin_modes=plugin_modes,
     )
     saturation = mode_saturation(mode, image_settings=image_settings)
+    res = tuple(resolution) if resolution else (image.size if image is not None else None)
+    lut_params = _resolve_lut_params(image_settings=image_settings, settings=settings, resolution=res)
 
     manual = settings.get("colourMode") == MANUAL
     if manual:
@@ -235,7 +307,14 @@ def colour_plan(plugin_id=None, settings=None, image_settings=None, image=None):
         saturation = _number(settings.get("colourInk"), saturation, 0.0, 1.0)
 
     image_settings["inky_saturation"] = saturation
-    return {"mode": mode, "enhance": image_settings, "saturation": saturation, "manual": manual}
+    return {
+        "mode": mode,
+        "enhance": image_settings,
+        "saturation": saturation,
+        "manual": manual,
+        "resolution": res,
+        "lut_params": lut_params,
+    }
 
 
 def palette_from_inky(inky_display):
@@ -340,8 +419,9 @@ def _oklab_to_linear_srgb(L, a, b_ok):
     return r, g, b
 
 
-def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
+def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE, params=None):
     """Compute the (size^3, 3) float32 OKLab + sub-palette alignment LUT table."""
+    p = params or _resolve_lut_params()
     grid = np.linspace(0.0, 1.0, size, dtype=np.float32)
     b_in, g_in, r_in = np.meshgrid(grid, grid, grid, indexing="ij")
 
@@ -355,20 +435,23 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
     hue_deg = np.degrees(hue) % 360.0
 
     if mode == VIVID:
-        L = np.clip(L ** VIVID_GAMMA, 0.0, 1.0)
-        base_sat = VIVID_SATURATION
+        L = np.clip(L ** p["vivid_gamma"], 0.0, 1.0)
+        base_sat = p["vivid_saturation"]
     else:
-        if PHOTO_SHADOW_LIFT > 0.0 or PHOTO_MID_LIFT > 0.0:
-            t = np.clip(L / PHOTO_LIFT_KNEE, 0.0, 1.0)
+        shadow_lift = p["shadow_lift"]
+        mid_lift = p["mid_lift"]
+        lift_knee = p["lift_knee"]
+        if shadow_lift > 0.0 or mid_lift > 0.0:
+            t = np.clip(L / lift_knee, 0.0, 1.0)
             w = (1.0 - t) ** 2 * (1.0 + 2.0 * t)
             L = np.clip(
                 L
-                + PHOTO_SHADOW_LIFT * (np.maximum(L, 1e-4) ** 0.75) * w
-                + PHOTO_MID_LIFT * np.sin(np.pi * t) * (1.0 - t),
+                + shadow_lift * (np.maximum(L, 1e-4) ** 0.75) * w
+                + mid_lift * np.sin(np.pi * t) * (1.0 - t),
                 0.0,
                 1.0,
             )
-        base_sat = PHOTO_SATURATION
+        base_sat = p["photo_saturation"]
 
     # Skin-tone chroma protection: warm hues (~25-65 deg in OKLab) resist over-saturation
     skin_hue_w = np.exp(-0.5 * ((hue_deg - 45.0) / 22.0) ** 2)
@@ -378,10 +461,11 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
     C = C * sat_scale
 
     # Soft-knee OKLab chroma compression to pull extreme out-of-gamut colors onto Spectra 6 inks
-    if GAMUT_COMPRESS_STRENGTH > 0.0:
+    gamut_compress = p["gamut_compress"]
+    if gamut_compress > 0.0:
         knee_c = 0.16
         excess = np.maximum(0.0, C - knee_c)
-        C = np.where(C > knee_c, knee_c + excess / (1.0 + GAMUT_COMPRESS_STRENGTH * (excess / 0.16)), C)
+        C = np.where(C > knee_c, knee_c + excess / (1.0 + gamut_compress * (excess / 0.16)), C)
 
     a = C * np.cos(hue)
     b_ok = C * np.sin(hue)
@@ -395,10 +479,11 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
         # Sub-palette harmonic alignment so each color family dithers with 1-2 inks
         max_rg = np.maximum(r, g)
         blue_dom = np.clip((b - max_rg) / 0.25, 0.0, 1.0)
-        if PHOTO_BLUE_DARKEN > 0.0:
+        blue_darken = p["blue_darken"]
+        if blue_darken > 0.0:
             blue_luma = r * 0.299 + g * 0.587 + b * 0.114
             blue_weight = blue_dom * np.clip(1.15 - 0.75 * blue_luma, 0.20, 1.0)
-            darken = 1.0 - PHOTO_BLUE_DARKEN * blue_weight
+            darken = 1.0 - blue_darken * blue_weight
             r *= darken
             g *= darken
             b *= darken
@@ -409,7 +494,8 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
 
         max_rb = np.maximum(r, b)
         green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
-        g_adj = g * (1.0 - PHOTO_GREEN_DARKEN * green_dom) if PHOTO_GREEN_DARKEN > 0.0 else g
+        green_darken = p["green_darken"]
+        g_adj = g * (1.0 - green_darken * green_dom) if green_darken > 0.0 else g
         pastel = np.clip((g_adj - 0.68) / 0.32, 0.0, 1.0)
         b_clean = g_adj * (0.18 + 0.55 * pastel)
         warm_offset = np.clip(r - b, 0.0, 0.25 * g_adj)
@@ -427,8 +513,9 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
     g = np.clip(g * WHITE_POINT_MULTS[1], 0.0, 1.0)
     b = np.clip(b * WHITE_POINT_MULTS[2], 0.0, 1.0)
 
-    if HIGHLIGHT_CLIP is not None:
-        clip_thresh = HIGHLIGHT_CLIP / 255.0
+    highlight_clip = p["highlight_clip"]
+    if highlight_clip is not None:
+        clip_thresh = highlight_clip / 255.0
         near_white = np.minimum(np.minimum(r, g), b) > clip_thresh
         r = np.where(near_white, 1.0, r)
         g = np.where(near_white, 1.0, g)
@@ -437,21 +524,23 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE):
     return np.stack([r, g, b], axis=-1).reshape(-1, 3).astype(np.float32)
 
 
-def _lut_cache_path(mode, size):
-    """Parameter-hashed .npy path so any constant tweak automatically invalidates the disk cache."""
-    params = (
-        f"{mode}|{size}|{PHOTO_SHADOW_LIFT}|{PHOTO_MID_LIFT}|{PHOTO_LIFT_KNEE}|"
-        f"{PHOTO_BLUE_DARKEN}|{PHOTO_GREEN_DARKEN}|{VIVID_GAMMA}|"
-        f"{PHOTO_SATURATION}|{VIVID_SATURATION}|{GAMUT_COMPRESS_STRENGTH}|"
-        f"{WHITE_POINT_MULTS}|{HIGHLIGHT_CLIP}"
+def _lut_cache_path(mode, size, params):
+    """Parameter-hashed .npy path so any constant or device.json tweak automatically invalidates."""
+    p = params or _resolve_lut_params()
+    sig = (
+        f"{mode}|{size}|{p['shadow_lift']:.4f}|{p['mid_lift']:.4f}|{p['lift_knee']:.4f}|"
+        f"{p['blue_darken']:.4f}|{p['green_darken']:.4f}|{p['vivid_gamma']:.4f}|"
+        f"{p['photo_saturation']:.4f}|{p['vivid_saturation']:.4f}|{p['gamut_compress']:.4f}|"
+        f"{WHITE_POINT_MULTS}|{p['highlight_clip']}"
     )
-    digest = hashlib.sha256(params.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(sig.encode("utf-8")).hexdigest()[:12]
     return os.path.join(tempfile.gettempdir(), f"inkypi_spectra6_lut_{mode}_{digest}.npy")
 
 
-def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
+def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE, params=None, cache_path=None):
     """Load or compile a 33x33x33 perceptual OKLab 3D LUT for Pillow."""
-    cache_path = _lut_cache_path(mode, size)
+    p = params or _resolve_lut_params()
+    cache_path = cache_path or _lut_cache_path(mode, size, p)
     expected_shape = (size ** 3, 3)
     table = None
 
@@ -465,7 +554,7 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
             logger.debug(f"Could not read cached 3D LUT {cache_path}: {e}")
 
     if table is None:
-        table = _compute_spectra6_lut_table(mode=mode, size=size)
+        table = _compute_spectra6_lut_table(mode=mode, size=size, params=p)
         try:
             tmp_path = f"{cache_path}.{os.getpid()}.tmp.npy"
             np.save(tmp_path, table)
@@ -477,13 +566,17 @@ def _build_spectra6_3dlut(mode=PHOTO, size=LUT_SIZE):
     return ImageFilter.Color3DLUT(size, table.ravel().tolist(), channels=3)
 
 
-def get_spectra6_3dlut(mode=PHOTO):
-    """Return a cached Color3DLUT filter for the given rendering mode."""
+def get_spectra6_3dlut(mode=PHOTO, params=None):
+    """Return a cached Color3DLUT filter for the given rendering mode and LUT parameters."""
     lut_key = PHOTO if mode == HYBRID else mode
-    lut = _LUT_CACHE.get(lut_key)
+    p = params or _resolve_lut_params()
+    cache_path = _lut_cache_path(lut_key, LUT_SIZE, p)
+    lut = _LUT_CACHE.get(cache_path)
     if lut is None:
-        lut = _build_spectra6_3dlut(mode=lut_key, size=LUT_SIZE)
-        _LUT_CACHE[lut_key] = lut
+        lut = _build_spectra6_3dlut(mode=lut_key, size=LUT_SIZE, params=p, cache_path=cache_path)
+        if len(_LUT_CACHE) >= _MAX_LUT_CACHE:
+            _LUT_CACHE.pop(next(iter(_LUT_CACHE)))
+        _LUT_CACHE[cache_path] = lut
     return lut
 
 
@@ -621,10 +714,16 @@ def _lock_hybrid_ui(indices, orig_pixels, palette):
     )
 
 
-def render_indices(image, palette, mode, saturation=None):
+def render_indices(image, palette, mode, saturation=None, plan=None, resolution=None):
     """Palette indices (one per pixel) as the display will show them."""
     if saturation is None:
         saturation = MODE_INK_SATURATION.get(mode, MODE_INK_SATURATION[PHOTO])
+
+    res = (
+        resolution
+        or (plan.get("resolution") if isinstance(plan, dict) else None)
+        or image.size
+    )
 
     if mode == GRAPHICS:
         quant = blended(palette, saturation)
@@ -639,23 +738,34 @@ def render_indices(image, palette, mode, saturation=None):
         indices = _ordered_indices(rgb, quant, neutral_inks)
         return _sharpen_edges(indices, pixels, rgb, palette, neutral_inks)
 
+    params = (
+        plan.get("lut_params")
+        if isinstance(plan, dict) and "lut_params" in plan
+        else _resolve_lut_params(resolution=res)
+    )
+
     image = image.convert("RGB")
     orig_pixels = np.asarray(image, dtype=np.uint8) if mode == HYBRID else None
 
     if mode == PHOTO:
-        image = _smooth_flat_areas(image)
+        image = _smooth_flat_areas(image, strength=params["denoise_strength"])
         if PHOTO_CONTRAST != 1.0:
             image = ImageEnhance.Contrast(image).enhance(PHOTO_CONTRAST)
 
     if mode in (PHOTO, VIVID):
-        image = _sharpen_photo_details(image)
+        image = _sharpen_photo_details(
+            image,
+            radius=params["sharpen_radius"],
+            percent=params["sharpen_percent"],
+            threshold=params["sharpen_threshold"],
+        )
 
     # Single-pass C-level OKLab 3D LUT transform
-    image = image.filter(get_spectra6_3dlut(mode=mode))
+    image = image.filter(get_spectra6_3dlut(mode=mode, params=params))
 
-    # Dual-palette quantization: dither against calibrated paper-normalized pigments
+    # Dual-palette quantization: dither against panel-calibrated paper-normalized pigments
     pure = np.array(palette["pure"], dtype=np.float32)
-    perceived = perceived_palette(palette)
+    perceived = perceived_palette(palette, resolution=res)
     quant = perceived * saturation + pure * (1.0 - saturation)
 
     # Pad quantization palette to 256 entries so Pillow's C color-cache never reads uninitialized slots
@@ -680,16 +790,17 @@ def to_pure_palette_image(indices, palette):
     return image
 
 
-def perceived_palette(palette):
-    """The inks as the eye sees them: calibrated paper-normalized Spectra 6 targets."""
+def perceived_palette(palette, resolution=None):
+    """The inks as the eye sees them: panel-calibrated paper-normalized Spectra 6 targets."""
     if len(palette.get("measured", [])) == len(CALIBRATED_PERCEIVED):
-        return CALIBRATED_PERCEIVED.copy()
+        return _panel_profile(resolution)["perceived"].copy()
     measured = np.array(palette["measured"], dtype=np.float32)
     white = measured[_white_index(palette)]
     return np.clip(measured / np.maximum(white, 1) * 255.0, 0, 255)
 
 
-def simulate(image, palette, mode, saturation=None):
+def simulate(image, palette, mode, saturation=None, resolution=None):
     """What the panel will look like (calibrated ink colours, normalised to the paper white)."""
-    indices = render_indices(image, palette, mode, saturation)
-    return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB")
+    res = resolution or image.size
+    indices = render_indices(image, palette, mode, saturation=saturation, resolution=res)
+    return Image.fromarray(perceived_palette(palette, resolution=res).astype(np.uint8)[indices], "RGB")
