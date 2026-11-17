@@ -35,6 +35,19 @@ def boost_blue_green_channels(img):
     return Image.merge("RGB", (r, g, b))
 
 
+def _has_active_enhancements(image_settings):
+    """True only if any global enhancement multiplier differs from neutral 1.0."""
+    if not isinstance(image_settings, dict):
+        return False
+    for key in ("saturation", "contrast", "brightness", "sharpness"):
+        try:
+            if float(image_settings.get(key, 1.0)) != 1.0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 class DisplayManager:
 
     """Manages the display and rendering of images."""
@@ -83,15 +96,18 @@ class DisplayManager:
         logger.info(f"Saving image to {self.device_config.current_image_file}")
         image.save(self.device_config.current_image_file)
 
-        # Resize and adjust orientation
+        # Orient and resize only if dimensions do not already match the target panel
+        target_resolution = tuple(self.device_config.get_resolution())
         image = change_orientation(image, self.device_config.get_config("orientation"))
-        image = resize_image(image, self.device_config.get_resolution(), image_settings)
+        if image.size != target_resolution:
+            image = resize_image(image, target_resolution, image_settings)
         if self.device_config.get_config("inverted_image"):
             image = image.rotate(180)
 
-        # Apply standard global enhancements (config dict, distinct from layout list above)
+        # Skip redundant global enhancement passes when all multipliers are neutral 1.0
         global_image_settings = self.device_config.get_config("image_settings") or {}
-        image = apply_image_enhancement(image, global_image_settings)
+        if _has_active_enhancements(global_image_settings):
+            image = apply_image_enhancement(image, global_image_settings)
 
         # Route Spectra 6 displays through eink.py; use legacy G/B boost only for other displays
         if getattr(self.display, "spectra_palette", None) is not None:
@@ -100,6 +116,7 @@ class DisplayManager:
                 settings=plugin_settings,
                 image_settings=global_image_settings,
                 image=image,
+                resolution=target_resolution,
             )
             logger.info(
                 f"Spectra 6 colour plan (plugin={plugin_id}): "
