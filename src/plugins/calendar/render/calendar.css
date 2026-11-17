@@ -1,9 +1,9 @@
 /* Map the Medium font to "normal" */
 @font-face {
-    font-family: 'Roboto';
-    src: url('../../../static/fonts/Roboto-VariableFont_wdth,wght.ttf') format('truetype');
-    font-weight: 100 900;
-    font-style: normal;
+  font-family: 'Roboto';
+  src: url('../../../static/fonts/Roboto-VariableFont_wdth,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
 }
 
 /* Basic Reset */
@@ -13,11 +13,66 @@
   padding: 0;
 }
 
+:root {
+  /* Compact 1px 4-way zero-blur white halo for small text on 800x480 */
+  --text-halo:
+    -1px  0px 0 #ffffff,
+     1px  0px 0 #ffffff,
+     0px -1px 0 #ffffff,
+     0px  1px 0 #ffffff;
+  --dot-halo:
+    drop-shadow(-1px  0px 0 #ffffff)
+    drop-shadow( 1px  0px 0 #ffffff)
+    drop-shadow( 0px -1px 0 #ffffff)
+    drop-shadow( 0px  1px 0 #ffffff);
+}
+
+/* Large 1600x1200 (LargeInky): 1.5px/1px octagonal halo — crisp without crowding small lines */
+@media (min-width: 1400px) and (min-height: 1000px) {
+  :root {
+    --text-halo:
+      -1.5px  0px   0 #ffffff,
+       1.5px  0px   0 #ffffff,
+       0px   -1.5px 0 #ffffff,
+       0px    1.5px 0 #ffffff,
+      -1px   -1px   0 #ffffff,
+       1px   -1px   0 #ffffff,
+      -1px    1px   0 #ffffff,
+       1px    1px   0 #ffffff;
+    --dot-halo:
+      drop-shadow(-1.5px  0px   0 #ffffff)
+      drop-shadow( 1.5px  0px   0 #ffffff)
+      drop-shadow( 0px   -1.5px 0 #ffffff)
+      drop-shadow( 0px    1.5px 0 #ffffff)
+      drop-shadow(-1px   -1px   0 #ffffff)
+      drop-shadow( 1px   -1px   0 #ffffff)
+      drop-shadow(-1px    1px   0 #ffffff)
+      drop-shadow( 1px    1px   0 #ffffff);
+  }
+}
+
+.calendar,
+.calendar * {
+  font-family: 'Roboto', sans-serif;
+  text-rendering: auto;
+  -webkit-font-smoothing: none !important;
+  font-smoothing: none !important;
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "cv05" 1, "tnum" 1;
+}
+
 .calendar {
   width: 100%;
   height: 100%;
-  font-family: 'Roboto', sans-serif;
   overflow: hidden;
+  text-shadow: var(--text-halo);
+}
+
+/* Solid-fill all-day/multi-day event bars already have high contrast; avoid muddy inner halos */
+.fc-h-event,
+.fc-h-event * {
+  text-shadow: none !important;
 }
 
 .fc-toolbar.fc-header-toolbar {
@@ -30,25 +85,24 @@
 
 .fc .fc-daygrid-day-number {
   padding-top: 0px !important;
-  padding-bottom: 0px !important; 
+  padding-bottom: 0px !important;
+  font-weight: 700 !important;
 }
 
-.fc-widget-header{
-  background-color:white;
+.fc .fc-col-header-cell-cushion {
+  font-weight: 700 !important;
 }
 
-.fc-dayGrid-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame{
+.fc-widget-header {
+  background-color: white;
+}
+
+.fc-dayGrid-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame,
+.fc-dayGridMonth-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame {
   border: 2px solid var(--fc-border-color) !important;
 }
 
-.fc-dayGridMonth-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame{
-  border: 2px solid var(--fc-border-color) !important;
-}
-
-.fc-timeGrid-view thead .fc-day.fc-day-today .fc-scrollgrid-sync-inner{
-  border: 2px solid var(--fc-border-color) !important;
-}
-
+.fc-timeGrid-view thead .fc-day.fc-day-today .fc-scrollgrid-sync-inner,
 .fc-timeGridWeek-view thead .fc-col-header-cell.fc-day-today .fc-scrollgrid-sync-inner {
   border: 2px solid var(--fc-border-color) !important;
 }
@@ -60,6 +114,7 @@
 .fc-scrollgrid {
   border-color: transparent !important;
 }
+
 .fc-scrollgrid td:last-of-type {
   border-right-color: transparent !important;
 }
@@ -72,6 +127,7 @@ th {
 
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
+  font-weight: 900 !important;
 }
 
 .fc table {
@@ -97,12 +153,13 @@ th {
   white-space: normal !important;
 }
 
-/* Ensure the Dot Remains Visible but Flows Inline */
+/* Ensure the Dot Remains Visible, Flows Inline, and Pops Over Background Images */
 .fc-dayGridMonth-view .fc-daygrid-event-dot,
 .fc-dayGrid-view .fc-daygrid-event-dot {
   display: inline-block !important;
   margin-right: 4px !important;
   vertical-align: middle !important;
+  filter: var(--dot-halo) !important;
 }
 
 /* Treat Time and Title as Standard Inline Text */
@@ -115,15 +172,15 @@ th {
   word-wrap: break-word !important;
 }
 
-/* Make title normal weight specifically */
+/* Medium (500) weight keeps small event titles solid inside the 1.5px white halo */
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
-  font-weight: normal !important; 
+  font-weight: 500 !important;
 }
 
 /* Add bold weight and margin to the time specifically */
 .fc-dayGridMonth-view .fc-event-time,
 .fc-dayGrid-view .fc-event-time {
   margin-right: 4px !important;
-  font-weight: bold !important;
+  font-weight: 700 !important;
 }
