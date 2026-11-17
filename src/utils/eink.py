@@ -4,7 +4,7 @@ Rendering modes:
 - "photo": Cached 33x33x33 perceptual OKLab 3D LUT (skin-tone chroma protection,
   perceptual shadow/midtone lift, soft-knee gamut compression, sub-palette hue
   alignment, and paper-white highlight clip) paired with edge-preserving flat-area
-  noise smoothing and dual-palette Floyd-Steinberg dithering.
+  noise smoothing and calibrated dual-palette Floyd-Steinberg dithering.
 - "vivid": High-punch OKLab 3D LUT + full perceived ink gamut dithering for
   landscapes and illustrations.
 - "graphics": Tuned for UI-like images (weather, calendar, charts, text) with colour
@@ -30,32 +30,32 @@ MODES = (PHOTO, VIVID, GRAPHICS, MANUAL)
 RENDERINGS = (PHOTO, VIVID, GRAPHICS)
 _ALIASES = {"classic": PHOTO}
 
-# Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full perceived ink gamut).
+# Per-mode ink saturation (0.0 = pure driver RGB, 1.0 = full calibrated perceived ink gamut).
 # Independent of global device.json -> image_settings["inky_saturation"].
 MODE_INK_SATURATION = {
-    PHOTO: 0.85,     # 3D LUT normalizes paper white & gamut, allowing accurate perceived-ink dithering
+    PHOTO: 1.00,     # Dithers 100% against calibrated physical ink targets without pure-primary skew
     GRAPHICS: 0.50,  # Solid black text + rich, clean color fills on UI dashboards
-    VIVID: 1.00,     # Full perceived ink gamut normalized to paper white
+    VIVID: 1.00,     # Full calibrated perceived ink gamut
 }
 
 # 3D LUT & perceptual OKLab curve parameters
 LUT_SIZE = 33                           # 33x33x33 grid (~430 KB cached, C-level trilinear interpolation)
-PHOTO_SHADOW_LIFT = 0.20                # Perceptual OKLab lightness lift for dark indoor shadows
+PHOTO_SHADOW_LIFT = 0.10                # Keeps dark shadows/indoor backgrounds rich without milky haze
 PHOTO_MID_LIFT = 0.03                   # Gentle lower-midtone separation
 PHOTO_LIFT_KNEE = 0.70                  # Tapers lift smoothly to 0 above OKLab L=0.70 so highlights stay intact
 PHOTO_BLUE_DARKEN = 0.18                # Deepens mid/deep blues while keeping sky highlights airy
 PHOTO_GREEN_DARKEN = 0.08               # Anchors foliage onto solid green ink
 VIVID_GAMMA = 0.88                      # Perceptual lightness lift for "vivid" mode
-PHOTO_SATURATION = 1.10                 # OKLab chroma boost (skin tones protected automatically)
+PHOTO_SATURATION = 1.12                 # OKLab chroma boost (skin tones protected automatically)
 VIVID_SATURATION = 1.22                 # Higher OKLab chroma boost for landscapes/illustrations
 PHOTO_CONTRAST = 1.00                   # Neutral contrast
 PHOTO_DENOISE_STRENGTH = 0.65           # Edge-preserving flat-area smoothing (integer math, low RAM)
 PHOTO_DENOISE_EDGE = 18                 # Local RGB diff threshold above which edges/text stay untouched
-GAMUT_COMPRESS_STRENGTH = 0.45          # Soft-knee OKLab chroma roll-off for out-of-gamut colors
+GAMUT_COMPRESS_STRENGTH = 0.40          # Soft-knee OKLab chroma roll-off for out-of-gamut colors
 WHITE_POINT_MULTS = (1.00, 1.00, 1.00)  # Neutral white balance
 HIGHLIGHT_CLIP = 246                    # Snaps near-white paper backgrounds/clouds cleanly to #FFFFFF
 
-# Cache for compiled PIL.ImageFilter.Color3DLUT instances keyed by (mode, saturation_rounded)
+# Cache for compiled PIL.ImageFilter.Color3DLUT instances keyed by mode
 _LUT_CACHE = {}
 
 # Manual mode: per-instance values replacing the global image settings
@@ -85,6 +85,18 @@ SPECTRA6 = {
     "pure": [[0, 0, 0], [255, 255, 255], [255, 255, 0], [255, 0, 0], [0, 0, 255], [0, 255, 0]],
     "measured": [[0, 0, 0], [161, 164, 165], [208, 190, 71], [156, 72, 75], [61, 59, 94], [58, 91, 70]],
 }
+
+# Paper-white normalized perceived Spectra 6 ink targets (Black, White, Yellow, Red, Blue, Green).
+# Prevents yellow highlight clipping and salmon/lavender drift caused by dividing Pimoroni's
+# raw SATURATED_PALETTE by 161.
+CALIBRATED_PERCEIVED = np.array([
+    [15, 18, 20],     # Black: preserves shadow depth without grey haze
+    [255, 255, 255],  # White: paper reference
+    [239, 222, 68],   # Yellow: kept <255 so bright skin/cream avoids stray yellow dots
+    [178, 35, 35],    # Red: deep crimson; prevents salmon/pink drift
+    [42, 88, 178],    # Blue: true cerulean/cobalt rather than lavender-grey
+    [36, 108, 54],    # Green: rich foliage green
+], dtype=np.float32)
 
 _BAYER8 = (np.array([
     [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
@@ -532,13 +544,17 @@ def render_indices(image, palette, mode, saturation=None):
     # Single-pass C-level OKLab 3D LUT transform
     image = image.filter(get_spectra6_3dlut(mode=mode))
 
-    # Dual-palette quantization: dither against perceived paper-normalized pigments
+    # Dual-palette quantization: dither against calibrated paper-normalized pigments
     pure = np.array(palette["pure"], dtype=np.float32)
     perceived = perceived_palette(palette)
     quant = perceived * saturation + pure * (1.0 - saturation)
 
+    # Pad quantization palette to 256 entries so Pillow's C color-cache never reads uninitialized slots
+    flat_pal = [int(round(v)) for v in np.asarray(quant).flatten()]
+    flat_pal += flat_pal[:3] * (256 - len(quant))
     pal_image = Image.new("P", (1, 1))
-    pal_image.putpalette([int(v) for v in np.asarray(quant).flatten()])
+    pal_image.putpalette(flat_pal)
+
     quantized = image.quantize(len(quant), palette=pal_image, dither=Image.Dither.FLOYDSTEINBERG)
     return np.asarray(quantized, dtype=np.uint8)
 
@@ -551,13 +567,15 @@ def to_pure_palette_image(indices, palette):
 
 
 def perceived_palette(palette):
-    """The inks as the eye sees them: measured colours relative to the paper white."""
+    """The inks as the eye sees them: calibrated paper-normalized Spectra 6 targets."""
+    if len(palette.get("measured", [])) == len(CALIBRATED_PERCEIVED):
+        return CALIBRATED_PERCEIVED.copy()
     measured = np.array(palette["measured"], dtype=np.float32)
     white = measured[_white_index(palette)]
     return np.clip(measured / np.maximum(white, 1) * 255.0, 0, 255)
 
 
 def simulate(image, palette, mode, saturation=None):
-    """What the panel will look like (measured ink colours, normalised to the paper white)."""
+    """What the panel will look like (calibrated ink colours, normalised to the paper white)."""
     indices = render_indices(image, palette, mode, saturation)
     return Image.fromarray(perceived_palette(palette).astype(np.uint8)[indices], "RGB")
