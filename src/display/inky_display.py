@@ -71,6 +71,7 @@ class InkyDisplay(AbstractDisplay):
                 self.spectra_palette,
                 mode=plan["mode"],
                 saturation=plan["saturation"],
+                plan=plan,
             )
             pure_p_image = eink.to_pure_palette_image(indices, self.spectra_palette)
             self.inky_display.set_image(pure_p_image)
