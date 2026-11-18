@@ -6,19 +6,17 @@
   font-style: normal;
 }
 
-/* Basic Reset (fixed '*' selector so box-sizing and zero margins apply) */
 * {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
 }
 
 :root {
-  /* 800x480 (smallinky): compact cell headers + 1px 4-way zero-blur white halo */
+  /* 800x480 (smallinky): compact single-line day headers + 1px 4-way zero-blur white halo */
   --day-num-size: 0.90em;
   --day-num-pad: 0px 2px;
   --col-head-pad: 1px 2px;
-  --event-gap: 1px;
+  --event-bar-shadow: none;
+  --today-halo: 0 0 0 1px #ffffff, inset 0 0 0 1px #ffffff;
   --text-halo:
     -1px  0px 0 #ffffff,
      1px  0px 0 #ffffff,
@@ -37,7 +35,8 @@
     --day-num-size: 1em;
     --day-num-pad: 1px 4px;
     --col-head-pad: 3px 4px;
-    --event-gap: 2px;
+    --event-bar-shadow: 0 0 0 1px #ffffff;
+    --today-halo: 0 0 0 2px #ffffff, inset 0 0 0 2px #ffffff;
     --text-halo:
       -1.5px  0px   0 #ffffff,
        1.5px  0px   0 #ffffff,
@@ -77,14 +76,19 @@
   text-shadow: var(--text-halo);
 }
 
-/* Solid-fill all-day/multi-day event bars already have high contrast; avoid muddy inner halos */
+/* Solid-fill all-day/multi-day event bars: crisp white outer outline, no muddy inner text halo */
+.fc-h-event {
+  border: 1px solid #ffffff !important;
+  box-shadow: var(--event-bar-shadow) !important;
+}
+
 .fc-h-event,
 .fc-h-event * {
   text-shadow: none !important;
 }
 
 .fc-toolbar.fc-header-toolbar {
-  margin-bottom: 2px !important;
+  margin-bottom: 0px !important;
 }
 
 .fc .fc-daygrid-day-top {
@@ -107,26 +111,28 @@
 }
 
 .fc .fc-daygrid-body-natural .fc-daygrid-day-events {
-  margin-top: 0px !important;
   margin-bottom: 0px !important;
-}
-
-.fc .fc-daygrid-event-harness {
-  margin-top: var(--event-gap) !important;
 }
 
 .fc-widget-header {
   background-color: white;
 }
 
+/* Today highlight border with zero-blur pure-#FFFFFF outer + inner halo */
 .fc-dayGrid-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame,
 .fc-dayGridMonth-view .fc-daygrid-day.fc-day-today .fc-daygrid-day-frame {
+  position: relative;
+  z-index: 2;
   border: 2px solid var(--fc-border-color) !important;
+  box-shadow: var(--today-halo) !important;
 }
 
 .fc-timeGrid-view thead .fc-day.fc-day-today .fc-scrollgrid-sync-inner,
 .fc-timeGridWeek-view thead .fc-col-header-cell.fc-day-today .fc-scrollgrid-sync-inner {
+  position: relative;
+  z-index: 2;
   border: 2px solid var(--fc-border-color) !important;
+  box-shadow: var(--today-halo) !important;
 }
 
 .fc .fc-timegrid-now-indicator-line {
@@ -150,7 +156,6 @@ th {
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
   font-weight: 900 !important;
-  line-height: 1.15 !important;
 }
 
 .fc table {
@@ -163,7 +168,6 @@ th {
   display: block !important;
   white-space: normal !important;
   height: auto !important;
-  line-height: 1.15 !important;
 }
 
 /* Disable Flexbox and Force Inline Text Flow for Inner Elements */
@@ -196,7 +200,7 @@ th {
   word-wrap: break-word !important;
 }
 
-/* Medium (500) weight keeps small event titles solid inside the 1.5px white halo */
+/* Medium (500) weight keeps small event titles solid inside the white halo */
 .fc-dayGridMonth-view .fc-event-title,
 .fc-dayGrid-view .fc-event-title {
   font-weight: 500 !important;
