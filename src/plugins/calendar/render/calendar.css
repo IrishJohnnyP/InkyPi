@@ -6,7 +6,7 @@
   font-style: normal;
 }
 
-/* Basic Reset */
+/* Basic Reset (fixed '*' selector so box-sizing and zero margins apply) */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -14,7 +14,11 @@
 }
 
 :root {
-  /* Compact 1px 4-way zero-blur white halo for small text on 800x480 */
+  /* 800x480 (smallinky): compact cell headers + 1px 4-way zero-blur white halo */
+  --day-num-size: 0.90em;
+  --day-num-pad: 0px 2px;
+  --col-head-pad: 1px 2px;
+  --event-gap: 1px;
   --text-halo:
     -1px  0px 0 #ffffff,
      1px  0px 0 #ffffff,
@@ -30,6 +34,10 @@
 /* Large 1600x1200 (LargeInky): 1.5px/1px octagonal halo — crisp without crowding small lines */
 @media (min-width: 1400px) and (min-height: 1000px) {
   :root {
+    --day-num-size: 1em;
+    --day-num-pad: 1px 4px;
+    --col-head-pad: 3px 4px;
+    --event-gap: 2px;
     --text-halo:
       -1.5px  0px   0 #ffffff,
        1.5px  0px   0 #ffffff,
@@ -76,21 +84,35 @@
 }
 
 .fc-toolbar.fc-header-toolbar {
-  margin-bottom: 0px !important;
+  margin-bottom: 2px !important;
 }
 
-.fc .fc-daygrid-body-natural .fc-daygrid-day-events {
-  margin-bottom: 0px !important;
+.fc .fc-daygrid-day-top {
+  line-height: 1.1 !important;
 }
 
+/* Keep short month labels like 'Nov 1' on a single line without wrapping */
 .fc .fc-daygrid-day-number {
-  padding-top: 0px !important;
-  padding-bottom: 0px !important;
+  white-space: nowrap !important;
+  font-size: var(--day-num-size) !important;
+  padding: var(--day-num-pad) !important;
+  line-height: 1.1 !important;
   font-weight: 700 !important;
 }
 
 .fc .fc-col-header-cell-cushion {
+  padding: var(--col-head-pad) !important;
+  line-height: 1.1 !important;
   font-weight: 700 !important;
+}
+
+.fc .fc-daygrid-body-natural .fc-daygrid-day-events {
+  margin-top: 0px !important;
+  margin-bottom: 0px !important;
+}
+
+.fc .fc-daygrid-event-harness {
+  margin-top: var(--event-gap) !important;
 }
 
 .fc-widget-header {
@@ -128,6 +150,7 @@ th {
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
   font-weight: 900 !important;
+  line-height: 1.15 !important;
 }
 
 .fc table {
@@ -140,6 +163,7 @@ th {
   display: block !important;
   white-space: normal !important;
   height: auto !important;
+  line-height: 1.15 !important;
 }
 
 /* Disable Flexbox and Force Inline Text Flow for Inner Elements */
