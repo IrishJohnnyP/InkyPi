@@ -144,6 +144,7 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "--disable-dev-shm-usage",
             "--disable-gpu",
+            "--disable-lcd-text",
             "--use-gl=swiftshader",
             "--hide-scrollbars",
             "--in-process-gpu",
