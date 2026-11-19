@@ -152,29 +152,30 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             f"--window-size={dimensions[0]},{dimensions[1]}",
             # BYPASS CLOUDFLARE BOT PROTECTION
             "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            # E-INK PIXEL & COLOR ACCURACY
+            "--disable-dev-shm-usage",
             "--disable-gpu",
             "--disable-lcd-text",
-            "--force-color-profile=srgb",
-            "--force-device-scale-factor=1",
+            "--use-gl=swiftshader",
             "--hide-scrollbars",
-            # LOW-MEMORY / PI ZERO 2 LIMITS
-            "--disable-dev-shm-usage",
+            "--in-process-gpu",
             "--js-flags=--jitless",
+            "--disable-zero-copy",
+            "--disable-gpu-memory-buffer-compositor-resources",
+            "--disable-extensions",
+            "--disable-plugins",
+            "--mute-audio",
             "--renderer-process-limit=1",
             "--no-zygote",
             "--no-sandbox",
-            "--num-raster-threads=1",
-            # STARTUP TRIMMING
-            "--disable-extensions",
-            "--mute-audio",
+            "--num-raster-threads=1",  # Restricts raster threads to lower CPU/RAM spikes
+            # Startup-trimming flags to reduce Chromium cold-start time
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
             "--disable-sync",
             "--disable-default-apps",
             "--disable-component-update",
-            "--disable-features=Translate,BackForwardCache,MediaRouter",
+            "--disable-features=Translate,BackForwardCache"
         ]
 
         # Convert timeout_ms to seconds for Python's subprocess (default 360s)
@@ -187,8 +188,8 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             logger.error(f"Chromium screenshot timed out after {timeout_sec} seconds for {target}")
             return None
 
-        # Check if the process failed or the output file is missing/empty
-        if result.returncode != 0 or not os.path.exists(img_file_path) or os.path.getsize(img_file_path) == 0:
+        # Check if the process failed or the output file is missing
+        if result.returncode != 0 or not os.path.exists(img_file_path):
             logger.error(f"Failed to take screenshot (return code: {result.returncode})")
             return None
 
