@@ -456,10 +456,13 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE, params=None):
             r *= darken
             g *= darken
             b *= darken
-        blue_align = np.clip((b - np.maximum(r, g)) / 0.12, 0.0, 1.0)
-        rg_mid = 0.5 * (r + g)
-        r = r + blue_align * (rg_mid - r)
-        g = g + blue_align * (rg_mid - g)
+        # Keep blue-dominant pixels (denim, sky, water) on the clean Blue+Black+White axis
+        # (R <= 0.72 * G) so Floyd-Steinberg never injects Red dither dots that cause a purple cast,
+        # while leaving intentional purples/violets (r > g + 0.10) untouched.
+        not_purple = np.clip(1.0 - np.maximum(0.0, r - g) / 0.10, 0.0, 1.0)
+        blue_align = np.clip((b - np.maximum(r, g)) / 0.12, 0.0, 1.0) * not_purple
+        r_blue_clean = np.minimum(r, g * 0.72)
+        r = r + blue_align * (r_blue_clean - r)
 
         max_rb = np.maximum(r, b)
         green_dom = np.clip((g - max_rb) / 0.12, 0.0, 1.0)
@@ -496,7 +499,7 @@ def _lut_cache_path(mode, size, params):
     """Parameter-hashed .npy path so any constant or device.json tweak automatically invalidates."""
     p = params or _resolve_lut_params()
     sig = (
-        f"{mode}|{size}|{p['shadow_lift']:.4f}|{p['mid_lift']:.4f}|{p['lift_knee']:.4f}|"
+        f"lut_v2|{mode}|{size}|{p['shadow_lift']:.4f}|{p['mid_lift']:.4f}|{p['lift_knee']:.4f}|"
         f"{p['blue_darken']:.4f}|{p['green_darken']:.4f}|{p['vivid_gamma']:.4f}|"
         f"{p['photo_saturation']:.4f}|{p['vivid_saturation']:.4f}|{p['gamut_compress']:.4f}|"
         f"{WHITE_POINT_MULTS}|{p['highlight_clip']}"
