@@ -10,6 +10,7 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+
 def get_image(image_url):
     response = requests.get(image_url, timeout=30)
     img = None
@@ -18,6 +19,7 @@ def get_image(image_url):
     else:
         logger.error(f"Received non-200 response from {image_url}: status_code: {response.status_code}")
     return img
+
 
 def change_orientation(image, orientation, inverted=False):
     if orientation == 'horizontal':
@@ -29,6 +31,7 @@ def change_orientation(image, orientation, inverted=False):
         angle = (angle + 180) % 360
 
     return image.rotate(angle, expand=1)
+
 
 def resize_image(image, desired_size, image_settings=[]):
     img_width, img_height = image.size
@@ -42,7 +45,7 @@ def resize_image(image, desired_size, image_settings=[]):
 
     x_offset, y_offset = 0, 0
     new_width, new_height = img_width, img_height
-    
+
     # Step 1: Determine crop dimensions
     if img_ratio > desired_ratio:
         # Image is wider than desired aspect ratio
@@ -60,6 +63,7 @@ def resize_image(image, desired_size, image_settings=[]):
 
     # Step 3: Resize to the exact desired dimensions (if necessary)
     return image.resize((desired_width, desired_height), Image.LANCZOS)
+
 
 def apply_image_enhancement(img, image_settings={}):
     # Convert image to RGB mode if necessary for enhancement operations
@@ -81,14 +85,17 @@ def apply_image_enhancement(img, image_settings={}):
 
     return img
 
+
 def compute_image_hash(image):
     """Compute SHA-256 hash of an image."""
     image = image.convert("RGB")
     img_bytes = image.tobytes()
     return hashlib.sha256(img_bytes).hexdigest()
 
+
 def take_screenshot_html(html_str, dimensions, timeout_ms=None):
     image = None
+    html_file_path = None
     try:
         # Create a temporary HTML file
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as html_file:
@@ -97,13 +104,14 @@ def take_screenshot_html(html_str, dimensions, timeout_ms=None):
 
         image = take_screenshot(html_file_path, dimensions, timeout_ms)
 
-        # Remove html file
-        os.remove(html_file_path)
-
     except Exception as e:
         logger.error(f"Failed to take screenshot: {str(e)}")
+    finally:
+        if html_file_path and os.path.exists(html_file_path):
+            os.remove(html_file_path)
 
     return image
+
 
 def _find_chromium_binary():
     """Find the first available Chromium-based binary in system PATH."""
@@ -115,8 +123,10 @@ def _find_chromium_binary():
             return candidate
     return None
 
+
 def take_screenshot(target, dimensions, timeout_ms=360000):
     image = None
+    img_file_path = None
     try:
         # Find available browser binary
         browser = _find_chromium_binary()
@@ -133,7 +143,7 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
         # Create a temporary output file for the screenshot
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_file:
             img_file_path = img_file.name
-            
+
         command = [
             browser,
             target_uri,
@@ -142,33 +152,32 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             f"--window-size={dimensions[0]},{dimensions[1]}",
             # BYPASS CLOUDFLARE BOT PROTECTION
             "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "--disable-dev-shm-usage",
+            # E-INK PIXEL & COLOR ACCURACY
             "--disable-gpu",
             "--disable-lcd-text",
-            "--use-gl=swiftshader",
+            "--force-color-profile=srgb",
+            "--force-device-scale-factor=1",
             "--hide-scrollbars",
-            "--in-process-gpu",
+            # LOW-MEMORY / PI ZERO 2 LIMITS
+            "--disable-dev-shm-usage",
             "--js-flags=--jitless",
-            "--disable-zero-copy",
-            "--disable-gpu-memory-buffer-compositor-resources",
-            "--disable-extensions",
-            "--disable-plugins",
-            "--mute-audio",
             "--renderer-process-limit=1",
             "--no-zygote",
             "--no-sandbox",
-            "--num-raster-threads=1",  # Restricts raster threads to lower CPU/RAM spikes
-            # Startup-trimming flags to reduce Chromium cold-start time
+            "--num-raster-threads=1",
+            # STARTUP TRIMMING
+            "--disable-extensions",
+            "--mute-audio",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
             "--disable-sync",
             "--disable-default-apps",
             "--disable-component-update",
-            "--disable-features=Translate,BackForwardCache"
+            "--disable-features=Translate,BackForwardCache,MediaRouter",
         ]
-        
-        # Convert timeout_ms to seconds for Python's subprocess (default 90s)
+
+        # Convert timeout_ms to seconds for Python's subprocess (default 360s)
         timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 360.0
 
         try:
@@ -176,28 +185,25 @@ def take_screenshot(target, dimensions, timeout_ms=360000):
             result = subprocess.run(command, capture_output=True, check=False, timeout=timeout_sec)
         except subprocess.TimeoutExpired:
             logger.error(f"Chromium screenshot timed out after {timeout_sec} seconds for {target}")
-            if os.path.exists(img_file_path):
-                os.remove(img_file_path)
             return None
 
-        # Check if the process failed or the output file is missing
-        if result.returncode != 0 or not os.path.exists(img_file_path):
+        # Check if the process failed or the output file is missing/empty
+        if result.returncode != 0 or not os.path.exists(img_file_path) or os.path.getsize(img_file_path) == 0:
             logger.error(f"Failed to take screenshot (return code: {result.returncode})")
-            if os.path.exists(img_file_path):
-                os.remove(img_file_path)
             return None
 
         # Load the image using PIL
         with Image.open(img_file_path) as img:
             image = img.copy()
 
-        # Remove image files
-        os.remove(img_file_path)
-
     except Exception as e:
         logger.error(f"Failed to take screenshot: {str(e)}")
+    finally:
+        if img_file_path and os.path.exists(img_file_path):
+            os.remove(img_file_path)
 
     return image
+
 
 def pad_image_blur(img: Image, dimensions: tuple[int, int]) -> Image:
     bkg = ImageOps.fit(img, dimensions)
