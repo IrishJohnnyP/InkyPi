@@ -1,35 +1,37 @@
 :root {
+  --halo-color: #FFFFFF;
+
   /* Baseline 800x480: uniform 2px octagonal zero-blur halo */
   --text-halo:
-    -2px    0px   0 #FFFFFF,
-     2px    0px   0 #FFFFFF,
-     0px   -2px   0 #FFFFFF,
-     0px    2px   0 #FFFFFF,
-    -1.5px -1.5px 0 #FFFFFF,
-     1.5px -1.5px 0 #FFFFFF,
-    -1.5px  1.5px 0 #FFFFFF,
-     1.5px  1.5px 0 #FFFFFF;
+    -2px    0px   0 var(--halo-color),
+     2px    0px   0 var(--halo-color),
+     0px   -2px   0 var(--halo-color),
+     0px    2px   0 var(--halo-color),
+    -1.5px -1.5px 0 var(--halo-color),
+     1.5px -1.5px 0 var(--halo-color),
+    -1.5px  1.5px 0 var(--halo-color),
+     1.5px  1.5px 0 var(--halo-color);
 }
 
 /* Large 1600x1200 (LargeInky): uniform 4px octagonal zero-blur halo */
 @media (min-width: 1400px) and (min-height: 1000px) {
   :root {
     --text-halo:
-      -4px  0px 0 #FFFFFF,
-       4px  0px 0 #FFFFFF,
-       0px -4px 0 #FFFFFF,
-       0px  4px 0 #FFFFFF,
-      -3px -3px 0 #FFFFFF,
-       3px -3px 0 #FFFFFF,
-      -3px  3px 0 #FFFFFF,
-       3px  3px 0 #FFFFFF;
+      -4px  0px 0 var(--halo-color),
+       4px  0px 0 var(--halo-color),
+       0px -4px 0 var(--halo-color),
+       0px  4px 0 var(--halo-color),
+      -3px -3px 0 var(--halo-color),
+       3px -3px 0 var(--halo-color),
+      -3px  3px 0 var(--halo-color),
+       3px  3px 0 var(--halo-color);
   }
 }
 
 .countdown-container,
 .countdown-container * {
   font-family: "Jost", sans-serif;
-  color: #000000;
+  color: inherit;
   box-sizing: border-box;
 
   /* Crisp edges & consistent digit spacing for e-ink rendering */
@@ -40,7 +42,7 @@
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 
-  /* Solid white zero-blur halo around all countdown text */
+  /* Solid zero-blur halo around all countdown text */
   text-shadow: var(--text-halo);
 }
 
