@@ -1,9 +1,11 @@
 {% extends "plugin.html" %}
 
 {% block content %}
+{% set tc = (plugin_settings.textColor if plugin_settings is defined and plugin_settings.textColor else '') | lower | trim %}
+{% set is_white_text = tc in ['#ffffff', '#fff', 'white', 'rgb(255, 255, 255)', 'rgb(255,255,255)'] %}
 
-<div class="countdown-container">
-    <div class="countdown-wrapper" >
+<div class="countdown-container" style="--halo-color: {{ '#000000' if is_white_text else '#FFFFFF' }};">
+    <div class="countdown-wrapper">
         <h1 class="title">{{title}}</h1>
         <p class="subtitle">{{date}}</p>
         <div class="day_count">{{day_count}}</div>
