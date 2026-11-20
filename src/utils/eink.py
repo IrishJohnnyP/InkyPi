@@ -476,6 +476,21 @@ def _compute_spectra6_lut_table(mode=PHOTO, size=LUT_SIZE, params=None):
         g = g + green_dom * (g_adj - g)
         b = b + green_dom * (b_clean - b)
 
+        # Keep low-chroma beige, parchment, and light brown (r > g > b with yellow-warm balance)
+        # on the White + Yellow + Black dither axis instead of injecting Red ink dots (which look orange).
+        # Excludes pinkish skin tones (where r - g > g - b) and saturated oranges/reds (r - g >= 0.19).
+        rg_diff = np.maximum(0.0, r - g)
+        gb_diff = np.maximum(0.0, g - b)
+        rb_diff = np.maximum(0.0, r - b)
+        is_warm_neutral = (
+            np.clip(rg_diff / 0.03, 0.0, 1.0)
+            * np.clip((0.19 - rg_diff) / 0.07, 0.0, 1.0)
+            * np.clip((0.44 - rb_diff) / 0.12, 0.0, 1.0)
+            * np.clip((gb_diff - 0.80 * rg_diff + 0.02) / 0.05, 0.0, 1.0)
+        )
+        r_beige_clean = g + 0.45 * rg_diff
+        r = r + is_warm_neutral * (r_beige_clean - r)
+
         warm_mask = np.clip((r - np.maximum(g, b)) / 0.12, 0.0, 1.0) * np.clip((g - b + 0.04) / 0.08, 0.0, 1.0)
         b_warm = np.minimum(b, g * 0.92)
         b = b + warm_mask * (b_warm - b)
@@ -499,7 +514,7 @@ def _lut_cache_path(mode, size, params):
     """Parameter-hashed .npy path so any constant or device.json tweak automatically invalidates."""
     p = params or _resolve_lut_params()
     sig = (
-        f"lut_v2|{mode}|{size}|{p['shadow_lift']:.4f}|{p['mid_lift']:.4f}|{p['lift_knee']:.4f}|"
+        f"lut_v3|{mode}|{size}|{p['shadow_lift']:.4f}|{p['mid_lift']:.4f}|{p['lift_knee']:.4f}|"
         f"{p['blue_darken']:.4f}|{p['green_darken']:.4f}|{p['vivid_gamma']:.4f}|"
         f"{p['photo_saturation']:.4f}|{p['vivid_saturation']:.4f}|{p['gamut_compress']:.4f}|"
         f"{WHITE_POINT_MULTS}|{p['highlight_clip']}"
